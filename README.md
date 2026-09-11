@@ -1,110 +1,114 @@
-# Internal Tool Collection
+# Internal Tool Collection（内部工具集合）
 
-> An open-source-friendly toolbox for engineering operations: map data acquisition, data migration, format conversion, and content collection.
+> 面向工程场景的开源工具集合，提供地图下载、数据迁移、格式转换与内容采集的一体化 Web 平台。
 
-## Overview
+## 项目简介
 
-This repository provides a unified web workspace for commonly used engineering utilities.  
-It is built with:
+Internal Tool Collection 是一个前后端分离的实用工具平台，采用 Vue 3 + FastAPI 构建，覆盖日常工程中常见的高频任务：
 
-- Frontend: Vue 3 + Vite
-- Backend: FastAPI + async task management
+- 地图数据下载与预览
+- Docker 离线包下载
+- GJB5068 地图转 Shapefile
+- Elasticsearch / NebulaGraph 数据迁移
+- Markdown 转 Word
+- 图片格式转换
+- 数据库在线操作
+- 智能网页采集
+- GitHub 每日趋势报告
 
-Key goals:
+平台采用任务化流程：创建任务 → 执行进度监控 → 结果预览 → 导出下载 → 清理资源，强调可复用、可追踪、可维护。
 
-- Keep tasks clear and reproducible
-- Provide end-to-end operations (create -> run -> monitor -> export -> cleanup)
-- Make multi-tool work convenient for daily use
-- Keep user experience consistent across modules
+## 功能模块
 
-## Project Modules
+### 1. 卫星地图下载
 
-### 1) Satellite Map Download
+- 在线地图上框选多个范围并批量创建任务
+- 支持按层级范围下载（如 Z1–Z17）
+- 支持 PNG、GeoTIFF 输出
+- 支持 DEM（高程）下载与高程图层渲染
+- 支持按国家/州/城市等行政区边界下载
+- 任务支持暂停、继续、重试、删除
+- 支持 ZIP 结果导出与失败清理
 
-- Draw multiple rectangle areas on map for batch tasks
-- Download map tiles by zoom range (PNG) or GeoTIFF
-- Download DEM tiles and render elevation map style
-- Download by administrative region (country / state / city / district)
-- Pause, resume, retry on failure, delete
-- Export task artifacts as ZIP
+### 2. Docker 离线包下载
 
-### 2) Docker Offline Package
+- 支持常见架构：`x86_64`、`aarch64`、`armv7l`
+- 支持指定 Docker 与 Docker Compose 版本
+- 支持在线版本列表查询
+- 生成离线安装包并提供安装说明
+- 支持任务生命周期管理（暂停/继续/重试/删除）
+- 支持 ZIP 导出
 
-- Support common Linux architectures (`x86_64`, `aarch64`, `armv7l`)
-- Get available Docker and Docker Compose versions
-- Generate offline install bundles and scripts
-- Lifecycle controls: pause, resume, retry, delete
-- ZIP export
+### 3. GJB5068 地图转 Shapefile
 
-### 3) GJB5068 Map to Shapefile
+- 支持上传 GJB 地图目录（含 `.SMS`、`.XMS/.XSX/.XTP/.XZB`）
+- 解析点线面与注记图层
+- 一次任务支持多图层统一输出
+- 地图页预览转换结果
+- 支持失败重试与任务删除
 
-- Upload GJB map directories (for example `.SMS`, `.XMS/.XSX/.XTP/.XZB`)
-- Convert to standard Shapefile outputs
-- Preview converted geometry on map
-- Retry and delete tasks, ZIP export
+### 4. Elasticsearch 迁移
 
-### 4) Elasticsearch Migration
+- 支持 ES 7/8 集群连接测试
+- 支持索引级别的导入导出
+- 支持保留 `_id` 的导出与恢复
+- 支持导入导出任务异步执行
 
-- Connect to ES clusters and run import/export workflows
-- Export selected indices and restore in target clusters
-- Preserve selected data scope and index structure
+### 5. NebulaGraph 迁移
 
-### 5) NebulaGraph Migration
+- 支持 Space 级别配置与 Schema 导出
+- 支持点、边及关联数据导出恢复
+- 支持任务生命周期管理
 
-- Discover and connect to Nebula spaces
-- Export schema and data
-- Import backup packages into target spaces
+### 6. Markdown 转 Word
 
-### 6) Markdown to Word
+- 支持上传 Markdown 文件并转换为 DOCX
+- 内置 Mermaid 渲染并嵌入 Word
+- 提供转换结果预览和导出
+- 支持任务重试与删除
 
-- Convert Markdown documents to DOCX
-- Support Mermaid chart rendering and embed into Word output
-- Preview and export converted results
+### 7. 图片格式转换
 
-### 7) Image Format Conversion
+- 支持 HEIC/HEIF 相关流程与常见图片格式转换
+- 支持单文件、多文件与目录上传
+- 支持批量 ZIP 打包导出
+- 支持元数据保留和失败项重试
 
-- Batch conversion for image formats (including HEIC/HEIF related flows)
-- Multi-file and directory upload
-- Keep metadata where feasible
-- Export converted files by ZIP
+### 8. 数据库在线操作
 
-### 8) Database Operations
+- 支持 SQLite、PostgreSQL、Redis 的基础操作
+- 支持连接测试、表/键查看、分页查询
+- 支持数据导入导出与任务管理
 
-- SQLite / PostgreSQL / Redis operation page
-- Connection test, schema/key inspection, basic CRUD
-- Data export / import with task lifecycle
+### 9. 智能网页采集
 
-### 9) Intelligent Web Crawler
+- 支持通用网页、新闻站、微博/公众号、X（Twitter）、YouTube、TikTok（按能力开放）等场景
+- 支持字段抽取规则与自定义字段
+- 支持一次性任务与定时任务
+- 支持结果预览与导出
 
-- Universal page/news/X/YouTube/WeChat flows
-- Field extraction and selector helper
-- Scheduled collection and result management
-- Export to common data formats
+### 10. GitHub 每日热门报告
 
-### 10) GitHub Trending Report
+- 定时抓取并生成每日热门仓库报告
+- 支持按日期查看历史记录
+- 支持收藏与报告快速跳转
 
-- Daily GitHub trend report generation
-- Repository list and metadata with repository links
-- Historical report retention and viewing
+## 项目结构
 
-## Repository Layout
+- `backend/`：FastAPI 后端服务、任务调度与接口
+- `frontend/`：Vue 前端应用
+- `start.sh`：一键启动脚本
+- `tmp/`：运行时临时文件目录
 
-- `backend/`: FastAPI service and task APIs
-- `frontend/`: Vue client
-- `tmp/`: Runtime output and temporary files
-- `start.sh`: one-command startup script
+## 快速开始
 
-All task records and tool outputs are stored in backend runtime directories.
-
-## Local Development
-
-### Prerequisites
+### 1. 依赖环境
 
 - Python 3.11+
 - Node.js 18+
-- `uv` (recommended) or `pip` + virtualenv
+- uv（推荐）或可用的 pip 环境
 
-### Install
+### 2. 安装
 
 ```bash
 cd /Users/shunli/Documents/Home/Python/samples/projects/internal_tool
@@ -116,65 +120,55 @@ cd ../frontend
 npm install
 ```
 
-### Run
+### 3. 启动
 
 ```bash
 cd /Users/shunli/Documents/Home/Python/samples/projects/internal_tool
 ./start.sh
 ```
 
-Default endpoints:
+启动后访问：
 
-- Frontend: `http://localhost:5173`
-- Backend docs: `http://localhost:8000/docs`
+- 前端：http://localhost:5173
+- API 文档：http://localhost:8000/docs
 
-Press `Ctrl + C` to stop both services.
+按 `Ctrl + C` 可同时停止前后端。
 
-## API Notes
+## API 说明
 
-Tool APIs are exposed under `/api/<module>/...`, typically including:
+各模块统一使用 `/api/<模块>/...` 风格提供任务化接口，通常包含：
 
-- task creation
-- task list and detail
-- pause / resume
-- retry
-- delete
-- export
+- 创建任务
+- 查询任务列表/详情
+- 暂停
+- 继续
+- 重试
+- 删除
+- 导出
 
-Use `/docs` for full generated API schema.
+完整接口定义请参考服务运行时 `http://localhost:8000/docs`。
 
-## Configuration
+## 部署与数据
 
-Create environment variables according to your deployment need (do not commit secrets):
+- 任务数据与结果文件按模块保存在后端运行目录内
+- 删除任务时会清理关联产物文件，避免长期堆积
+- 建议单机测试部署；如需多实例生产化，请结合外部队列/数据库改造任务调度
 
-- crawler related LLM endpoints and keys (optional)
-- database connection parameters (when using DB tool)
-- any third-party credentials required by your target data source
+## 贡献指南
 
-> All credentials should be configured at runtime or local `.env` files and excluded from source control.
+欢迎提交 Issue 与 Pull Request。
 
-## Data and Cleanup
+1. Fork 本仓库
+2. 新建特性分支
+3. 提交实现与必要的使用说明
+4. 发起 PR，并在说明中补充页面截图或示例任务结果
 
-Task artifacts and temporary uploads are stored in backend data directories.
+## 安全与合规
 
-When a task is deleted, related artifacts are cleared together with task records.
+- 严禁提交 `.env`、Token、API Key 等敏感信息
+- 地图与爬取任务请遵循目标站点的 robots 与服务条款
+- 建议在正式环境启用鉴权与访问限速
 
-## Contributing
+## 许可说明
 
-Contributions are welcome. To contribute:
-
-- Fork the repository
-- Create a feature branch
-- Keep API and UI behavior backward compatible
-- Add clear usage notes for every tool change
-- Submit a PR with usage screenshots or sample task outputs
-
-## Security and Compliance
-
-- Keep `.env`, API keys, and tokens out of git history
-- Respect robots policies and website terms when using crawler workflows
-- Use reasonable rate limits for third-party map and content sources
-
-## License
-
-Add a license file before public redistribution if a specific license is required.
+本仓库当前以开源项目形式维护，请根据你的发布需求补充具体许可证文件（如 Apache-2.0、MIT 等）。
