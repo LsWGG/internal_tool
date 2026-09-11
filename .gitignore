@@ -1,0 +1,30 @@
+# Local Python environment and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend dependencies/build output
+node_modules/
+frontend/dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Runtime data, uploads and generated exports
+tmp/
+backend/*_data/
+backend/**/uploads/
+backend/**/outputs/
+backend/cache/
+backend/data/
+*.log
+
+# OS/editor files
+.DS_Store
+.idea/
+.vscode/

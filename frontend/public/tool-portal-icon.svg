@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">工程工具门户</title>
+  <desc id="desc">由智能核心、互联节点和工具模块组成的亮色科技图标</desc>
+  <defs>
+    <linearGradient id="surface" x1="28" y1="18" x2="226" y2="238" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#EEF4FF"/></linearGradient>
+    <linearGradient id="brand" x1="68" y1="55" x2="193" y2="205" gradientUnits="userSpaceOnUse"><stop stop-color="#27B8DC"/><stop offset=".52" stop-color="#4169E1"/><stop offset="1" stop-color="#835BD7"/></linearGradient>
+    <linearGradient id="core" x1="101" y1="94" x2="157" y2="164" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#DFF5FF"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#3B63B8" flood-opacity=".2"/></filter>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="58" fill="url(#surface)" stroke="#D9E4F3" stroke-width="4"/>
+  <path d="M65 70h126M65 186h126M70 65v126M186 65v126" stroke="#4F78B0" stroke-opacity=".08" stroke-width="2"/>
+  <g filter="url(#shadow)"><path d="M128 46 198 87v82l-70 41-70-41V87l70-41Z" fill="url(#brand)"/><path d="M128 61 184 94v66l-56 33-56-33V94l56-33Z" fill="#FFFFFF" fill-opacity=".12" stroke="#FFFFFF" stroke-opacity=".28" stroke-width="2"/></g>
+  <g stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"><path d="M128 91V72M128 184v-19M91 128H72M184 128h-19M102 102 88 88M168 168l-14-14M154 102l14-14M88 168l14-14"/></g>
+  <g fill="#FFFFFF"><circle cx="128" cy="69" r="7"/><circle cx="128" cy="187" r="7"/><circle cx="69" cy="128" r="7"/><circle cx="187" cy="128" r="7"/><circle cx="86" cy="86" r="6"/><circle cx="170" cy="170" r="6"/><circle cx="170" cy="86" r="6"/><circle cx="86" cy="170" r="6"/></g>
+  <circle cx="128" cy="128" r="43" fill="url(#core)" stroke="#FFFFFF" stroke-width="5"/>
+  <path d="m128 96 8.5 22.5L159 127l-22.5 8.5L128 158l-8.5-22.5L97 127l22.5-8.5L128 96Z" fill="url(#brand)"/><circle cx="128" cy="127" r="7" fill="#FFFFFF"/>
+</svg>

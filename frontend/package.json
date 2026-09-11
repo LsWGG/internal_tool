@@ -1,0 +1,26 @@
+{
+  "name": "satellite-download-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@6over3/zeroperl-ts": "1.0.10",
+    "@geoman-io/leaflet-geoman-free": "^2.18.3",
+    "@uswriting/exiftool": "1.0.9",
+    "axios": "^1.8.4",
+    "docx-preview": "^0.4.0",
+    "fflate": "^0.8.3",
+    "heic-to": "^1.5.2",
+    "leaflet": "^1.9.4",
+    "vue": "^3.5.13"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.3",
+    "vite": "^6.2.3"
+  }
+}

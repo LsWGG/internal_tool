@@ -1,0 +1,24 @@
+/* Shared select styling across every tool, including the expanded menu. */
+#app select:not([multiple]) {
+  appearance:none;
+  min-height:36px;
+  padding-right:32px!important;
+  border:1px solid #cfdbea;
+  border-radius:9px;
+  color:#334b65;
+  background-color:#fff;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='m3 4.5 3 3 3-3' fill='none' stroke='%2370849b' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")!important;
+  background-position:right 11px center!important;
+  background-repeat:no-repeat!important;
+  text-overflow:ellipsis;
+  cursor:pointer;
+}
+#app select:focus-visible,#app select[aria-expanded=true]{outline:2px solid #93b4ec;outline-offset:2px}
+#app select:disabled{opacity:.55;cursor:not-allowed;background-color:#f4f6f9}
+.ui-select-menu{position:fixed;z-index:100000;box-sizing:border-box;overflow:auto;overscroll-behavior:contain;padding:5px;border:1px solid #dce4ee;border-radius:11px;background:#fff;color:#334b65;box-shadow:0 8px 28px #203c6024;font:13px/1.5 inherit;scrollbar-width:thin}
+.ui-select-menu [role=option]{position:relative;box-sizing:border-box;min-height:36px;padding:8px 30px 8px 11px;border-radius:6px;cursor:pointer;font-size:13px;line-height:1.5;white-space:normal;overflow-wrap:anywhere}
+.ui-select-menu [role=option]:hover,.ui-select-menu [role=option].focused{background:#f0f5fc}
+.ui-select-menu [aria-selected=true]{color:#3264bc;background:#edf3ff;font-weight:600}
+.ui-select-menu [aria-selected=true]:after{content:'✓';position:absolute;right:11px;top:8px}
+.ui-select-menu [aria-disabled=true]{opacity:.4;cursor:not-allowed}
+.ui-select-group{padding:8px 11px 4px;color:#8898aa;font-size:11px}
