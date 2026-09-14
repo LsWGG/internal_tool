@@ -38,6 +38,20 @@ main.ui-shell.is-portal{max-width:none;padding:0;height:100dvh;overflow:hidden}
   --ui-success:#318269;--ui-success-soft:#eaf7f2;--ui-warning:#956a2d;--ui-warning-soft:#fff7e8;
   --ui-control-height:36px;--ui-control-radius:8px;--ui-panel-radius:14px;
 }
+
+/* Give 4K screens a balanced reading width and usable map workspace. */
+@media (min-width:1800px){
+  .ui-shell{max-width:1760px;margin-left:auto;margin-right:auto;padding-left:48px;padding-right:48px}
+  .ui-shell .tool-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+  .ui-shell .category-tools,.ui-shell .category-tools.single{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}
+  .ui-shell .workspace{grid-template-columns:380px minmax(0,1fr);height:680px}
+  .ui-shell .docker-workspace,.ui-shell .gjb-workspace,.ui-shell .es-workspace,.ui-shell .nebula-workspace{grid-template-columns:410px minmax(0,1fr)}
+  .ui-shell .tile-viewer-workspace{grid-template-columns:390px minmax(0,1fr)}
+  .ui-shell .tile-viewer-map{height:720px}
+  .ui-shell .shp-workspace{grid-template-columns:440px minmax(0,1fr);height:720px}
+  .ui-shell .panel{padding:26px}
+}
+@media (min-width:2600px){.ui-shell{max-width:1920px;padding-left:64px;padding-right:64px}.ui-shell .tool-grid{gap:28px}.ui-shell .category-tools{gap:22px}}
 .ui-shell:not(.is-portal){color:var(--ui-text)}
 .ui-shell:not(.is-portal) :is(button,a,input,select,textarea){font-family:Inter,"PingFang SC","Microsoft YaHei",sans-serif}
 
