@@ -2557,7 +2557,7 @@ class CrawlerTaskManager:
             raise ValueError(message)
         if source == "wechat" and not account_name and not urls:
             raise ValueError("请先输入公众号名称或文章链接")
-        if source not in ("twitter", "youtube", "tiktok", "telegram", "wechat") and not urls:
+        if source not in ("twitter", "youtube", "tiktok", "douyin", "telegram", "wechat") and not urls:
             raise ValueError("请先输入网页或新闻列表页地址")
 
         if source == "news":
