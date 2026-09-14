@@ -1,4 +1,4 @@
-"""Web adapter for the canonical script/maps_utils/gjb2shp.py converter."""
+"""Self-contained GJB to Shapefile conversion adapter."""
 import importlib.util
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ from pyproj import CRS, Transformer
 
 
 def _load_converter():
-    path = Path(__file__).resolve().parents[3] / "gjb2shp.py"
+    path = Path(__file__).with_name("gjb2shp.py")
     spec = importlib.util.spec_from_file_location("canonical_gjb2shp", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -98,7 +98,8 @@ class MarkdownWordManager:
         blocks = list(pattern.finditer(markdown))
         if not blocks:
             return markdown, []
-        mmdc = self._binary("mmdc", ["/Users/shunli/.nvm/versions/node/v18.16.0/bin/mmdc"])
+        # Resolve Mermaid CLI from PATH so the project has no machine-specific dependency.
+        mmdc = self._binary("mmdc", [])
         diagram_dir = task_dir / "mermaid"
         diagram_dir.mkdir(exist_ok=True)
         replacements = []
