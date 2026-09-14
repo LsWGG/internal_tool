@@ -39,6 +39,7 @@ BUILTIN_FIELDS = {
     "news": ["title", "description", "author", "published_at", "content", "image", "source", "url"],
     "twitter": ["text", "author", "published_at", "likes", "reposts", "replies", "media", "url"],
     "tiktok": ["title", "description", "author", "username", "published_at", "duration", "views", "likes", "comments", "shares", "thumbnail", "url"],
+    "douyin": ["title", "description", "author", "username", "published_at", "duration", "views", "likes", "comments", "shares", "thumbnail", "url"],
     "telegram": ["message_id", "text", "author", "published_at", "views", "forwards", "replies", "media", "chat", "url"],
     "youtube": ["title", "description", "channel", "published_at", "duration", "views", "likes", "thumbnail", "url"],
     "wechat": ["title", "author", "published_at", "content", "image", "account", "url"],
@@ -67,6 +68,7 @@ SOURCE_NAMES = {
     "news": "新闻文章",
     "twitter": "推文",
     "tiktok": "TikTok",
+    "douyin": "抖音",
     "telegram": "Telegram",
     "youtube": "YouTube 视频",
     "wechat": "公众号文章",
@@ -501,7 +503,7 @@ class CrawlerTaskManager:
                 "SELECT payload FROM records ORDER BY collected_at, rowid")]
         finally:
             connection.close()
-        if not rows and source == "tiktok" and request.get("tiktok_mode") == "comments" and targets:
+        if not rows and source in ("tiktok", "douyin") and request.get("tiktok_mode") == "comments" and targets:
             # 评论接口受限时仍返回视频占位行，允许用户继续配置字段和创建任务。
             rows = [{name: (url if name == "url" else "") for name in names}]
             errors = []
@@ -568,9 +570,9 @@ class CrawlerTaskManager:
     def builtin_fields(source, twitter_mode=None, tiktok_mode=None, telegram_mode=None):
         if source == "twitter" and twitter_mode == "user":
             names = TWITTER_USER_FIELDS
-        elif source == "tiktok" and tiktok_mode == "user":
+        elif source in ("tiktok", "douyin") and tiktok_mode == "user":
             names = TIKTOK_USER_FIELDS
-        elif source == "tiktok" and tiktok_mode == "comments":
+        elif source in ("tiktok", "douyin") and tiktok_mode == "comments":
             names = TIKTOK_COMMENT_FIELDS
         elif source == "telegram" and telegram_mode == "members":
             names = TELEGRAM_MEMBER_FIELDS
@@ -680,10 +682,10 @@ class CrawlerTaskManager:
             telegram_mode = "channel"
         if source == "wechat" and not account_name and not urls:
             raise ValueError("请输入公众号名称或微信文章链接")
-        if source in ("twitter", "youtube", "tiktok", "telegram") and not keyword:
+        if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") and not keyword:
             if source == "twitter" and twitter_mode != "keyword":
                 message = "请输入 X 账号"
-            elif source == "tiktok":
+            elif source in ("tiktok", "douyin"):
                 message = {"user": "请输入 TikTok 账号", "videos": "请输入 TikTok 账号",
                            "comments": "请输入 TikTok 视频链接"}.get(tiktok_mode, "请输入 TikTok 搜索关键词")
             elif source == "telegram":
@@ -727,11 +729,11 @@ class CrawlerTaskManager:
         youtube_quality = int(payload.get("youtube_quality") or 720)
         if youtube_quality not in (360, 720, 1080):
             youtube_quality = 720
-        label_target = keyword if source in ("twitter", "youtube", "tiktok", "telegram") else (account_name if source == "wechat" and account_name else (urlparse(urls[0]).netloc if urls else ""))
+        label_target = keyword if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") else (account_name if source == "wechat" and account_name else (urlparse(urls[0]).netloc if urls else ""))
         twitter_label = {"user": "X 用户信息", "history": "X 历史推文", "keyword": "X 关键词推文"}.get(twitter_mode)
         tiktok_label = {"keyword": "TikTok 关键词视频", "comments": "TikTok 视频评论", "user": "TikTok 账号信息", "videos": "TikTok 账号视频"}.get(tiktok_mode)
         telegram_label = {"channel": "Telegram 频道", "group": "Telegram 群组", "members": "Telegram 群组成员", "search": "Telegram 全平台搜索"}.get(telegram_mode)
-        label = payload.get("name") or (f"{twitter_label} · {label_target}" if source == "twitter" else (f"{tiktok_label} · {label_target}" if source == "tiktok" else (f"{telegram_label} · {label_target}" if source == "telegram" else f"{SOURCE_NAMES.get(source, '网页')}采集 · {label_target}")))
+        label = payload.get("name") or (f"{twitter_label} · {label_target}" if source == "twitter" else (f"{tiktok_label} · {label_target}" if source in ("tiktok", "douyin") else (f"{telegram_label} · {label_target}" if source == "telegram" else f"{SOURCE_NAMES.get(source, '网页')}采集 · {label_target}")))
         record = {"id": task_id, "name": str(label)[:120], "status": "queued", "progress": 0,
                   "current": 0, "total": 0 if source in ("news", "wechat", "twitter", "youtube", "tiktok", "telegram") else len(urls), "message": "等待采集", "error": None,
                   "created_at": now, "updated_at": now, "next_run_at": next_run,
@@ -2540,8 +2542,8 @@ class CrawlerTaskManager:
             name = str(field.get("name") if isinstance(field, dict) else field).strip()
             if name and name not in names:
                 names.append(name)
-        if source in ("twitter", "youtube", "tiktok", "telegram") and not keyword:
-            if source == "tiktok":
+        if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") and not keyword:
+            if source in ("tiktok", "douyin"):
                 message = {"user": "请先输入 TikTok 账号", "videos": "请先输入 TikTok 账号",
                            "comments": "请先输入 TikTok 视频链接"}.get(
                                request.get("tiktok_mode"), "请先输入 TikTok 搜索关键词"
@@ -2571,7 +2573,7 @@ class CrawlerTaskManager:
             targets = self._discover_youtube_urls(keyword, request)[:sample_size]
         elif source == "twitter":
             targets = self._discover_twitter_posts(keyword, request)[:sample_size]
-        elif source == "tiktok":
+        elif source in ("tiktok", "douyin"):
             try:
                 targets = self._discover_tiktok_data(keyword, request)[:sample_size]
             except RuntimeError as exc:
@@ -2625,9 +2627,9 @@ class CrawlerTaskManager:
             mode = "video"
         elif source == "twitter" and selected.intersection({"text", "media", "author", "url"}):
             mode = "social"
-        elif source == "tiktok" and request.get("tiktok_mode") == "comments":
+        elif source in ("tiktok", "douyin") and request.get("tiktok_mode") == "comments":
             mode = "social"
-        elif source == "tiktok" and selected.intersection({"title", "description", "thumbnail", "url"}):
+        elif source in ("tiktok", "douyin") and selected.intersection({"title", "description", "thumbnail", "url"}):
             mode = "video"
         elif source == "telegram" and request.get("telegram_mode") != "members":
             mode = "social"
@@ -2971,13 +2973,13 @@ class CrawlerTaskManager:
         rows, errors = [], []
         try:
             source = request.get("source", "generic")
-            download_videos = bool(request.get("download_videos", True)) and (source == "youtube" or (source == "tiktok" and request.get("tiktok_mode") in ("keyword", "videos")))
+            download_videos = bool(request.get("download_videos", True)) and (source == "youtube" or (source in ("tiktok", "douyin") and request.get("tiktok_mode") in ("keyword", "videos")))
             videos_dir = task_dir / "videos" if download_videos else None
             unit = {"news": "篇新闻", "wechat": "篇文章", "youtube": "个视频",
                     "twitter": "条推文", "tiktok": "个视频", "telegram": "条消息"}.get(source, "个网页")
             if source == "twitter" and request.get("twitter_mode") == "user":
                 unit = "个用户"
-            if source == "tiktok":
+            if source in ("tiktok", "douyin"):
                 unit = {"user": "个账号", "comments": "条评论"}.get(
                     request.get("tiktok_mode"), "个视频"
                 )
@@ -3005,7 +3007,7 @@ class CrawlerTaskManager:
                     targets_file.write_text(json.dumps(urls, ensure_ascii=False), "utf-8")
             elif source == "twitter":
                 urls = self._discover_twitter_posts(request.get("keyword", ""), request, task_id)
-            elif source == "tiktok":
+            elif source in ("tiktok", "douyin"):
                 urls = self._discover_tiktok_data(request.get("keyword", ""), request, task_id)
             elif source == "telegram":
                 urls = self._discover_telegram_data(request.get("keyword", ""), request, task_id)
@@ -3047,7 +3049,7 @@ class CrawlerTaskManager:
                             for field in request.get("fields", [])
                         }
                         row.setdefault("url", url)
-                        if source == "tiktok":
+                        if source in ("tiktok", "douyin"):
                             self._fill_tiktok_download_row(
                                 row, info, target.get("prefill", {}) if isinstance(target, dict) else {}
                             )

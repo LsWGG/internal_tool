@@ -25,7 +25,7 @@ ADAPTERS = {
     "wechat": SourceAdapter("wechat", "微信公众号"),
     "youtube": SourceAdapter("youtube", "YouTube", supports_video=True, requires_keyword=True),
     "tiktok": SourceAdapter("tiktok", "TikTok", ("keyword", "comments", "user", "videos"), True, True),
-    "douyin": SourceAdapter("douyin", "抖音", ("keyword", "comments", "user", "videos"), True, True),
+    "douyin": SourceAdapter("tiktok", "抖音", ("keyword", "comments", "user", "videos"), True, True),
     "twitter": SourceAdapter("twitter", "X / Twitter", ("keyword", "user"), requires_keyword=True),
     "telegram": SourceAdapter("telegram", "Telegram", ("channel", "group", "members", "search"), requires_keyword=True),
 }
