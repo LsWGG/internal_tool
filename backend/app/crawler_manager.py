@@ -1615,7 +1615,7 @@ class CrawlerTaskManager:
     @staticmethod
     def _tiktok_video_url(value):
         match = re.search(
-            r"https?://(?:www\.)?(?:tiktok\.com/@[A-Za-z0-9._]+/video/\d+|douyin\.com/video/\d+)",
+            r"https?://(?:www\.)?(?:tiktok\.com/@[A-Za-z0-9._]+/video/\d+|douyin\.com/video/\d+|v\.douyin\.com/[A-Za-z0-9_-]+)",
             html_lib.unescape(str(value or "")), re.I,
         )
         return match.group(0).split("?", 1)[0] if match else ""
