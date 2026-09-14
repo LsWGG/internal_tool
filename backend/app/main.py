@@ -37,12 +37,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http
 manager = TaskManager(Path(__file__).resolve().parents[1] / "data")
 docker_manager = DockerTaskManager(
     Path(__file__).resolve().parents[1] / "docker_data",
-    Path(__file__).resolve().parents[4] / "shell" / "download_docker_offline.sh",
+    Path(__file__).resolve().parents[1] / "download_docker_offline.sh",
 )
 gjb_manager = GJBTaskManager(Path(__file__).resolve().parents[1] / "gjb_data")
 es_manager = ESTaskManager(Path(__file__).resolve().parents[1] / "es_data")
 nebula_manager = NebulaTaskManager(Path(__file__).resolve().parents[1] / "nebula_data",
-                                   Path(__file__).resolve().parents[4] / "nebula_utils" / "nebula_data_util.py")
+                                   Path(__file__).resolve().parent / "nebula_data_util.py")
 shp_preview_manager = ShpPreviewManager(Path(__file__).resolve().parents[1] / "shp_preview_data")
 tile_preview_manager = TilePreviewManager(Path(__file__).resolve().parents[1] / "tile_preview_data")
 github_trending_manager = GitHubTrendingManager(Path(__file__).resolve().parents[1] / "github_trending_data")
