@@ -1615,7 +1615,7 @@ class CrawlerTaskManager:
     @staticmethod
     def _tiktok_video_url(value):
         match = re.search(
-            r"https?://(?:www\.)?tiktok\.com/@[A-Za-z0-9._]+/video/\d+",
+            r"https?://(?:www\.)?(?:tiktok\.com/@[A-Za-z0-9._]+/video/\d+|douyin\.com/video/\d+)",
             html_lib.unescape(str(value or "")), re.I,
         )
         return match.group(0).split("?", 1)[0] if match else ""
@@ -1653,6 +1653,8 @@ class CrawlerTaskManager:
             "socket_timeout": 30, "retries": 3, "playlistend": maximum,
             "extract_flat": "in_playlist" if flat else False,
         }
+        # yt-dlp handles both TikTok and Douyin URLs; keep the extractor
+        # generic so shared task/export logic remains unchanged.
         proxies = request.get("proxies") or []
         if proxies:
             proxy = str(proxies[0]).strip()
