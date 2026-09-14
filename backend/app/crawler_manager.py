@@ -693,7 +693,7 @@ class CrawlerTaskManager:
             else:
                 message = "请输入搜索关键词"
             raise ValueError(message)
-        if source not in ("wechat", "twitter", "youtube", "tiktok", "telegram") and not urls:
+        if source not in ("wechat", "twitter", "youtube", "tiktok", "douyin", "telegram") and not urls:
             raise ValueError("请至少提供一个公开网页地址")
         if len(urls) > 500:
             raise ValueError("单个任务最多 500 个网址")
