@@ -686,8 +686,9 @@ class CrawlerTaskManager:
             if source == "twitter" and twitter_mode != "keyword":
                 message = "请输入 X 账号"
             elif source in ("tiktok", "douyin"):
-                message = {"user": "请输入 TikTok 账号", "videos": "请输入 TikTok 账号",
-                           "comments": "请输入 TikTok 视频链接"}.get(tiktok_mode, "请输入 TikTok 搜索关键词")
+                platform = "抖音" if source == "douyin" else "TikTok"
+                message = {"user": f"请输入 {platform} 账号", "videos": f"请输入 {platform} 账号",
+                           "comments": f"请输入 {platform} 视频链接"}.get(tiktok_mode, f"请输入 {platform} 搜索关键词")
             elif source == "telegram":
                 message = "请输入全平台搜索关键词" if telegram_mode == "search" else "请输入 Telegram 频道或群组"
             else:
@@ -1609,9 +1610,10 @@ class CrawlerTaskManager:
     @staticmethod
     def _tiktok_username(value):
         text = html_lib.unescape(str(value or "")).strip()
-        match = re.search(r"(?:https?://(?:www\.)?tiktok\.com/)?@([A-Za-z0-9._]{2,24})", text, re.I)
-        if not match and re.fullmatch(r"[A-Za-z0-9._]{2,24}", text):
-            match = re.match(r"([A-Za-z0-9._]{2,24})", text)
+        # 抖音账号昵称可能包含中文；允许 @ 后的 Unicode 字符，过滤空白和 URL 分隔符。
+        match = re.search(r"(?:https?://(?:www\.)?(?:tiktok\.com|douyin\.com)/)?@([^\s/@?#]{2,40})", text, re.I)
+        if not match and re.fullmatch(r"[^\s/@?#]{2,40}", text):
+            match = re.match(r"([^\s/@?#]{2,40})", text)
         return match.group(1) if match else ""
 
     @staticmethod
@@ -2544,8 +2546,9 @@ class CrawlerTaskManager:
                 names.append(name)
         if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") and not keyword:
             if source in ("tiktok", "douyin"):
-                message = {"user": "请先输入 TikTok 账号", "videos": "请先输入 TikTok 账号",
-                           "comments": "请先输入 TikTok 视频链接"}.get(
+                platform = "抖音" if source == "douyin" else "TikTok"
+                message = {"user": f"请先输入 {platform} 账号", "videos": f"请先输入 {platform} 账号",
+                           "comments": f"请先输入 {platform} 视频链接"}.get(
                                request.get("tiktok_mode"), "请先输入 TikTok 搜索关键词"
                            )
             elif source == "telegram":

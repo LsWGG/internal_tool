@@ -179,7 +179,7 @@ async function previewCrawlerData(){
     // 兼容仍在运行的旧后端进程：旧版本会返回已经废弃的固定文案，
     // 前端统一替换为当前真实原因，避免用户继续看到误导性提示。
     crawlerDataPreviewError.value=/站内搜索和公开网页索引均未找到视频/.test(detail)
-      ? 'TikTok 当前未返回可公开访问的视频结果，匿名搜索可能受登录或地区限制。请粘贴具体视频链接，或配置可用代理后重试。'
+      ? `${crawlerShortVideoLabel.value} 当前未返回可公开访问的视频结果，匿名搜索可能受登录或地区限制。请粘贴具体视频链接，或配置可用代理后重试。`
       : detail
   }finally{crawlerDataPreviewLoading.value=false}
 }
