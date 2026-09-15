@@ -91,6 +91,9 @@ def build_gk_wkt(zone):
     )
 
 
+CRS_WKT['EPSG:4498'] = build_gk_wkt(20)
+
+
 # ============================================================
 # 基础 IO
 # ============================================================
@@ -313,24 +316,22 @@ def parse_zb(path):
                 feats.append({'coords': [[vals[i], vals[i + 1]]
                                          for i in range(0, len(vals), 2)]})
             elif gtype == 'A':
-                # 序号 X Y 环数，每环: 顶点数 + 坐标行
-                nrings = int(parts[3])
-                rings = []
-                for _ in range(nrings):
-                    npts = int(lines[idx].split()[0])
-                    idx += 1
-                    vals, idx = _read_coord_lines(lines, idx, npts * 2)
-                    rings.append([[vals[i], vals[i + 1]]
-                                  for i in range(0, len(vals), 2)])
-                feats.append({'rings': rings,
-                              'anchor': [float(parts[1]), float(parts[2])]})
-            else:  # N 注记
-                # 序号 X Y 0 0 点数，后跟一行坐标
-                npts = int(parts[5]) if len(parts) > 5 else 1
-                vals, idx = _read_coord_lines(lines, idx, npts * 2)
-                pts = [[vals[i], vals[i + 1]] for i in range(0, len(vals), 2)]
-                feats.append({'anchor': [float(parts[1]), float(parts[2])],
-                              'extra': pts})
+                try:
+                    npts = int(parts[4]) if len(parts) > 4 else 0
+                    rings = []
+                    if npts > 0:
+                        vals, idx = _read_coord_lines(lines, idx, npts * 2)
+                        rings = [[[vals[i], vals[i + 1]] for i in range(0, len(vals), 2)]]
+                    anchor = [float(parts[1]), float(parts[2])] if len(parts) >= 3 else [0.0, 0.0]
+                    feats.append({'rings': rings, 'anchor': anchor})   # 空要素也产出，计数对齐
+                except Exception:
+                    feats.append({'rings': [], 'anchor': [0.0, 0.0]})
+            else:  # N 注记：序号 X1 Y1 X2 Y2 <点数> [坐标...] 都在同一行
+                rest = [float(v) for v in parts[6:]]
+                pts = [[rest[i], rest[i + 1]] for i in range(0, len(rest) - 1, 2)]
+                anchor = [float(parts[1]), float(parts[2])]
+                extra = [[float(parts[3]), float(parts[4])]] + pts
+                feats.append({'anchor': anchor, 'extra': extra})
         result[gtype] = feats
     return result
 
