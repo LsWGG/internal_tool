@@ -1726,7 +1726,9 @@ class CrawlerTaskManager:
             raise ValueError("请输入有效的 TikTok 账号，例如 @tiktok")
         if task_id:
             self._update(task_id, status="running", message=f"正在读取 @{username} 的公开账号信息", progress=10)
-        profile_url = f"https://www.tiktok.com/@{username}"
+        platform = str(request.get("source") or "tiktok").lower()
+        profile_url = (f"https://www.douyin.com/user/{username}"
+                       if platform == "douyin" else f"https://www.tiktok.com/@{username}")
         try:
             html = self._fetch_html(profile_url, {**request, "dynamic": True, "preview_mode": True})
             row = self._tiktok_user_from_html(username, html)
@@ -1760,7 +1762,10 @@ class CrawlerTaskManager:
             raise ValueError("请输入有效的 TikTok 账号，例如 @tiktok")
         if task_id:
             self._update(task_id, status="running", message=f"正在查找 @{username} 的公开视频", progress=10)
-        info = self._tiktok_extract(f"https://www.tiktok.com/@{username}", request, flat=True)
+        platform = str(request.get("source") or "tiktok").lower()
+        profile_url = (f"https://www.douyin.com/user/{username}"
+                       if platform == "douyin" else f"https://www.tiktok.com/@{username}")
+        info = self._tiktok_extract(profile_url, request, flat=True)
         targets = []
         for entry in info.get("entries") or []:
             if not entry:
@@ -1768,7 +1773,8 @@ class CrawlerTaskManager:
             row = self._tiktok_video_row(entry)
             url = row["url"] or self._tiktok_video_url(entry.get("url"))
             if not url and entry.get("id"):
-                url = f"https://www.tiktok.com/@{username}/video/{entry['id']}"
+                url = (f"https://www.douyin.com/video/{entry['id']}"
+                       if platform == "douyin" else f"https://www.tiktok.com/@{username}/video/{entry['id']}")
             if url:
                 row["url"] = url
                 targets.append({"url": url, "detail_url": "", "prefill": row})
