@@ -2086,6 +2086,9 @@ class CrawlerTaskManager:
 
     def _discover_tiktok_data(self, value, request, task_id=None):
         mode = str(request.get("tiktok_mode") or "keyword").lower()
+        if request.get("source") == "douyin" and mode == "user":
+            from .douyin_profiles import discover_profiles
+            return discover_profiles(value, request)
         if mode == "user":
             return self._discover_tiktok_user(value, request, task_id)
         if mode == "videos":

@@ -33,6 +33,16 @@ if [[ ! -f "$BACKEND_DIR/requirements.txt" ]]; then
   exit 1
 fi
 
+# Playwright 的 Python 包与浏览器运行时分别安装。依赖升级后，旧缓存中的
+# Chromium 版本可能不再匹配；启动前检查一次，缺失时自动补齐。
+PLAYWRIGHT_CHROMIUM="$($PYTHON_BIN -c 'from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    print(p.chromium.executable_path)')"
+if [[ ! -x "$PLAYWRIGHT_CHROMIUM" ]]; then
+  echo "正在安装 Playwright Chromium 浏览器运行时……"
+  "$PYTHON_BIN" -m playwright install chromium
+fi
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "错误：未找到 npm，请先安装 Node.js。" >&2
   exit 1

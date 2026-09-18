@@ -20,6 +20,7 @@ from .tile_preview_manager import TilePreviewManager
 from .github_trending_manager import GitHubTrendingManager
 from .pdf_manager import PDFTaskManager
 from .md_word_manager import MarkdownWordManager
+from .mermaid_manager import MermaidExportManager
 from .image_convert_manager import ImageConvertManager
 from .database_manager import DatabaseClient, DatabaseTaskManager
 from .propzone_manager import PropZoneTaskManager
@@ -52,6 +53,7 @@ md_word_manager = MarkdownWordManager(
     Path(__file__).resolve().parents[1] / "md_word_data",
     Path(__file__).resolve().parent / "assets" / "md_word_reference.docx",
 )
+mermaid_manager = MermaidExportManager(Path(__file__).resolve().parents[1] / "mermaid_data")
 image_convert_manager = ImageConvertManager(
     Path(__file__).resolve().parents[1] / "image_convert_data"
 )
@@ -596,6 +598,83 @@ def export_md_word_task(task_id: str):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename=path.name,
     )
+
+
+@app.post('/api/mermaid/export')
+async def export_mermaid(file: UploadFile = File(...), theme: str = Form('neutral'), custom_theme: str = Form('')):
+    try:
+        custom = json.loads(custom_theme) if custom_theme else None
+        result = mermaid_manager.create(file.filename or 'mermaid.md', await file.read(), theme, custom)
+        return result
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f'Mermaid 导出失败：{exc}') from exc
+
+
+@app.post('/api/mermaid/preview')
+async def preview_mermaid(file: UploadFile = File(...), theme: str = Form('neutral'), custom_theme: str = Form('')):
+    try:
+        custom = json.loads(custom_theme) if custom_theme else None
+        return mermaid_manager.preview(file.filename or 'mermaid.md', await file.read(), theme, custom)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post('/api/mermaid/tasks/{task_id}/render')
+def render_mermaid(task_id: str):
+    task = mermaid_manager.start_render(task_id)
+    if not task: raise HTTPException(404, '预览任务不存在')
+    return task
+
+
+@app.post('/api/mermaid/tasks/{task_id}/theme')
+def update_mermaid_theme(task_id: str, theme: str = Form('neutral'), custom_theme: str = Form('')):
+    try:
+        custom = json.loads(custom_theme) if custom_theme else None
+        task = mermaid_manager.update_theme(task_id, theme, custom)
+        if not task: raise HTTPException(404, '预览任务不存在')
+        return task
+    except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+
+
+@app.post('/api/mermaid/tasks/{task_id}/images/{index}/render')
+def render_mermaid_image(task_id: str, index: int):
+    try:
+        task = mermaid_manager.start_preview_render(task_id, index)
+        if not task: raise HTTPException(404, '预览任务不存在')
+        return task
+    except ValueError as exc: raise HTTPException(400, str(exc)) from exc
+
+
+@app.get('/api/mermaid/tasks/{task_id}')
+def mermaid_status(task_id: str):
+    task = mermaid_manager.status(task_id)
+    if not task: raise HTTPException(404, '任务不存在')
+    return task
+
+
+@app.delete('/api/mermaid/tasks/{task_id}')
+def delete_mermaid_task(task_id: str):
+    if not mermaid_manager.delete(task_id):
+        raise HTTPException(404, '任务不存在')
+    return {"ok": True}
+
+
+@app.get('/api/mermaid/tasks/{task_id}/images/{name}')
+def mermaid_image(task_id: str, name: str):
+    path = mermaid_manager.image_path(task_id, name)
+    if not path:
+        raise HTTPException(404, '图片不存在')
+    return FileResponse(path, media_type='image/png')
+
+
+@app.get('/api/mermaid/tasks/{task_id}/export')
+def export_mermaid_zip(task_id: str):
+    path = mermaid_manager.archive_path(task_id)
+    if not path:
+        raise HTTPException(404, '当前主题的导出结果不存在，请先导出图片')
+    return FileResponse(path, media_type='application/zip', filename=path.name)
 
 @app.get('/api/pdf/tasks')
 def list_pdf_tasks(): return pdf_manager.list()

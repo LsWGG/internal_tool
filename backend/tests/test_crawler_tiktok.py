@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import Mock
 
 from app.crawler_manager import CrawlerTaskManager
+from app.douyin_profiles import _douyin_host, profile_link_rows, profile_rows
 
 
 class TikTokCrawlerTests(unittest.TestCase):
@@ -119,6 +120,27 @@ class TikTokCrawlerTests(unittest.TestCase):
         self.manager._discover_tiktok_keyword_videos = Mock(return_value=["keyword"])
         for mode in ("user", "videos", "comments", "keyword"):
             self.assertEqual(self.manager._discover_tiktok_data("value", {"tiktok_mode": mode}), [mode])
+
+    def test_douyin_profile_search_accepts_at_prefixed_nickname_and_common_ids(self):
+        rows = profile_rows({"user_list": [{
+            "secUid": "sec-123", "nickname": "人民日报", "uniqueId": "rmrb",
+            "follower_count": 7,
+        }]}, "@人民日报")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["username"], "rmrb")
+        self.assertEqual(rows[0]["followers"], 7)
+
+    def test_douyin_profile_search_accepts_official_api_subdomains(self):
+        self.assertTrue(_douyin_host("https://search.douyin.com/aweme/v1/web/search/user/"))
+        self.assertFalse(_douyin_host("https://douyin.com.example.test/user/fake"))
+
+    def test_douyin_profile_search_falls_back_to_exact_rendered_user_link(self):
+        rows = profile_link_rows([
+            {"href": "https://www.douyin.com/user/sec-wrong", "text": "人民日报健康客户端\n100万粉丝"},
+            {"href": "https://www.douyin.com/user/sec-rmrb", "text": "人民日报\n抖音号：rmrb"},
+        ], "@人民日报")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["url"], "https://www.douyin.com/user/sec-rmrb")
 
 
 if __name__ == "__main__":

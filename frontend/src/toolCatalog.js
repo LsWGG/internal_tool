@@ -15,6 +15,7 @@ export const toolGroups=[
     {id:'pdf',name:'网页转 PDF',tag:'网页归档',description:'输入网址或上传 Excel，批量转换、预览和下载 PDF。',keywords:'pdf 网页 excel',icon:'file'},
     {id:'word-batch',name:'Word 批量生成',tag:'模板填充',description:'自定义 Word 模板，按 Excel 数据批量填入文字和图片。',keywords:'docx excel 模板 图片 批量 word',icon:'word'},
     {id:'md-word',name:'Markdown 转 Word',tag:'技术文档',description:'保留标题、表格与代码，将 Mermaid 图形嵌入 Word。',keywords:'md markdown mermaid docx word',icon:'word'},
+    {id:'mermaid-export',name:'Mermaid 图片导出',tag:'图表生成',description:'从 Markdown 提取 Mermaid 代码块，按标题命名并预览、导出 PNG。',keywords:'mermaid markdown png 图表 流程图',icon:'image'},
   ]},
   {id:'images',name:'图片处理',english:'IMAGES',description:'转换图片格式，查看和管理照片元数据。',icon:'image',tools:[
     {id:'image-convert',name:'图片格式转换',tag:'多格式转换',description:'批量转换 HEIC、JPEG、PNG 等格式，尽可能保留元数据。',keywords:'heic jpg jpeg png webp tiff 图片',icon:'image'},

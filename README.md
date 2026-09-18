@@ -116,6 +116,9 @@ uv venv .venv
 source .venv/bin/activate
 cd backend
 pip install -r requirements.txt
+playwright install chromium
+# Mermaid 图片导出与 Markdown 转 Word 需要 Mermaid CLI
+npm install -g @mermaid-js/mermaid-cli
 cd ../frontend
 npm install
 ```
