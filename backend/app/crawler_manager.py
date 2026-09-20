@@ -59,6 +59,14 @@ TIKTOK_COMMENT_FIELDS = [
     "author", "username", "text", "published_at", "likes", "replies", "url",
 ]
 
+YOUTUBE_USER_FIELDS = [
+    "username", "display_name", "bio", "followers", "videos", "verified", "avatar", "url",
+]
+
+YOUTUBE_COMMENT_FIELDS = [
+    "author", "username", "text", "published_at", "likes", "replies", "url",
+]
+
 TELEGRAM_MEMBER_FIELDS = [
     "user_id", "username", "display_name", "bio", "bot", "verified", "status", "url",
 ]
@@ -267,6 +275,7 @@ class CrawlerTaskManager:
         self.lock = threading.RLock()
         self.pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="crawler-task")
         self.controls = {}
+        self.task_secrets = {}
         self.active_runs = {}
         self._dynamic_hosts = set()
         try:
@@ -551,7 +560,7 @@ class CrawlerTaskManager:
             sink["password"] = ""
             sink["password_configured"] = True
         request = result.get("request", {})
-        for key in ("telegram_api_hash", "telegram_session"):
+        for key in ("telegram_api_hash", "telegram_session", "douyin_cookie"):
             if request.get(key):
                 request[key] = ""
                 request[key + "_configured"] = True
@@ -567,13 +576,17 @@ class CrawlerTaskManager:
             return self.tasks.get(task_id)
 
     @staticmethod
-    def builtin_fields(source, twitter_mode=None, tiktok_mode=None, telegram_mode=None):
+    def builtin_fields(source, twitter_mode=None, tiktok_mode=None, telegram_mode=None, youtube_mode=None):
         if source == "twitter" and twitter_mode == "user":
             names = TWITTER_USER_FIELDS
         elif source in ("tiktok", "douyin") and tiktok_mode == "user":
             names = TIKTOK_USER_FIELDS
         elif source in ("tiktok", "douyin") and tiktok_mode == "comments":
             names = TIKTOK_COMMENT_FIELDS
+        elif source == "youtube" and youtube_mode == "user":
+            names = YOUTUBE_USER_FIELDS
+        elif source == "youtube" and youtube_mode == "comments":
+            names = YOUTUBE_COMMENT_FIELDS
         elif source == "telegram" and telegram_mode == "members":
             names = TELEGRAM_MEMBER_FIELDS
         else:
@@ -677,6 +690,9 @@ class CrawlerTaskManager:
         tiktok_mode = str(payload.get("tiktok_mode") or "keyword").strip().lower()
         if tiktok_mode not in ("keyword", "comments", "user", "videos"):
             tiktok_mode = "keyword"
+        youtube_mode = str(payload.get("youtube_mode") or "keyword").strip().lower()
+        if youtube_mode not in ("keyword", "comments", "user", "videos"):
+            youtube_mode = "keyword"
         telegram_mode = str(payload.get("telegram_mode") or "channel").strip().lower()
         if telegram_mode not in ("channel", "group", "members", "search"):
             telegram_mode = "channel"
@@ -689,6 +705,8 @@ class CrawlerTaskManager:
                 platform = "抖音" if source == "douyin" else "TikTok"
                 message = {"user": f"请输入 {platform} 账号", "videos": f"请输入 {platform} 账号",
                            "comments": f"请输入 {platform} 视频链接"}.get(tiktok_mode, f"请输入 {platform} 搜索关键词")
+            elif source == "youtube":
+                message = {"user": "请输入 YouTube 账号", "videos": "请输入 YouTube 账号", "comments": "请输入 YouTube 视频链接"}.get(youtube_mode, "请输入 YouTube 搜索关键词")
             elif source == "telegram":
                 message = "请输入全平台搜索关键词" if telegram_mode == "search" else "请输入 Telegram 频道或群组"
             else:
@@ -700,8 +718,9 @@ class CrawlerTaskManager:
             raise ValueError("单个任务最多 500 个网址")
         fields = payload.get("fields") or []
         if not fields:
-            fields = self.builtin_fields(source, twitter_mode, tiktok_mode, telegram_mode)
+            fields = self.builtin_fields(source, twitter_mode, tiktok_mode, telegram_mode, youtube_mode)
         proxies = [str(x).strip() for x in (payload.get("proxies") or []) if str(x).strip()]
+        douyin_cookie = str(payload.get("douyin_cookie") or "").strip()
         fmt = payload.get("output_format", "json")
         if fmt not in ("json", "csv", "xlsx", "jsonl", "postgresql", "video_zip"):
             fmt = "json"
@@ -733,8 +752,9 @@ class CrawlerTaskManager:
         label_target = keyword if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") else (account_name if source == "wechat" and account_name else (urlparse(urls[0]).netloc if urls else ""))
         twitter_label = {"user": "X 用户信息", "history": "X 历史推文", "keyword": "X 关键词推文"}.get(twitter_mode)
         tiktok_label = {"keyword": "TikTok 关键词视频", "comments": "TikTok 视频评论", "user": "TikTok 账号信息", "videos": "TikTok 账号视频"}.get(tiktok_mode)
+        youtube_label = {"keyword": "YouTube 关键词视频", "comments": "YouTube 视频评论", "user": "YouTube 账号信息", "videos": "YouTube 账号视频"}.get(youtube_mode)
         telegram_label = {"channel": "Telegram 频道", "group": "Telegram 群组", "members": "Telegram 群组成员", "search": "Telegram 全平台搜索"}.get(telegram_mode)
-        label = payload.get("name") or (f"{twitter_label} · {label_target}" if source == "twitter" else (f"{tiktok_label} · {label_target}" if source in ("tiktok", "douyin") else (f"{telegram_label} · {label_target}" if source == "telegram" else f"{SOURCE_NAMES.get(source, '网页')}采集 · {label_target}")))
+        label = payload.get("name") or (f"{twitter_label} · {label_target}" if source == "twitter" else (f"{tiktok_label} · {label_target}" if source in ("tiktok", "douyin") else (f"{youtube_label} · {label_target}" if source == "youtube" else (f"{telegram_label} · {label_target}" if source == "telegram" else f"{SOURCE_NAMES.get(source, '网页')}采集 · {label_target}"))))
         record = {"id": task_id, "name": str(label)[:120], "status": "queued", "progress": 0,
                   "current": 0, "total": 0 if source in ("news", "wechat", "twitter", "youtube", "tiktok", "telegram") else len(urls), "message": "等待采集", "error": None,
                   "created_at": now, "updated_at": now, "next_run_at": next_run,
@@ -747,6 +767,7 @@ class CrawlerTaskManager:
                               "account_name": account_name, "keyword": keyword, "max_items": max_items,
                               "twitter_mode": twitter_mode,
                               "tiktok_mode": tiktok_mode,
+                              "youtube_mode": youtube_mode,
                               "telegram_mode": telegram_mode,
                               "telegram_api_id": str(payload.get("telegram_api_id") or "").strip(),
                               "telegram_api_hash": str(payload.get("telegram_api_hash") or "").strip(),
@@ -759,6 +780,10 @@ class CrawlerTaskManager:
                   "result": None, "runs": []}
         with self.lock:
             self.tasks[task_id] = record
+            if douyin_cookie:
+                # Login state is only needed at execution time. Never write it
+                # into tasks.json, exports, or API task responses.
+                self.task_secrets[task_id] = {"douyin_cookie": douyin_cookie}
             self.controls[task_id] = {"paused": False, "cancelled": False}
             self._save()
         if cron:
@@ -1377,22 +1402,108 @@ class CrawlerTaskManager:
             self._update(task_id, status="running", message=f"正在 YouTube 搜索“{keyword}”", progress=10)
         api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
         video_ids = []
-        if api_key:
-            response = requests.get(
-                "https://www.googleapis.com/youtube/v3/search",
-                params={"part": "snippet", "type": "video", "q": keyword, "maxResults": min(maximum, 50), "key": api_key},
-                timeout=30,
-            )
-            response.raise_for_status()
-            video_ids = [item.get("id", {}).get("videoId") for item in response.json().get("items", [])]
-        else:
-            search_url = f"https://www.youtube.com/results?search_query={quote_plus(keyword)}&hl=zh-CN"
-            html = _decode_response(self._request(search_url, request.get("proxies", []), timeout=30))
-            video_ids = re.findall(r'"videoId"\s*:\s*"([\w-]{11})"', html)
+        try:
+            if api_key:
+                response = requests.get(
+                    "https://www.googleapis.com/youtube/v3/search",
+                    params={"part": "snippet", "type": "video", "q": keyword,
+                            "maxResults": min(maximum, 50), "key": api_key}, timeout=30,
+                )
+                response.raise_for_status()
+                video_ids = [item.get("id", {}).get("videoId") for item in response.json().get("items", [])]
+            else:
+                search_url = f"https://www.youtube.com/results?search_query={quote_plus(keyword)}&hl=zh-CN"
+                html = _decode_response(self._request(search_url, request.get("proxies", []), timeout=30))
+                video_ids = re.findall(r'"videoId"\s*:\s*"([\w-]{11})"', html)
+        except requests.RequestException as exc:
+            raise RuntimeError("YouTube 搜索暂时无法连接，请检查网络或代理配置后重试") from exc
         video_ids = list(dict.fromkeys(item for item in video_ids if item))[:maximum]
         if not video_ids:
             raise RuntimeError("YouTube 没有返回公开视频结果。可稍后重试，或由管理员配置 YOUTUBE_API_KEY。")
         return [f"https://www.youtube.com/watch?v={video_id}" for video_id in video_ids]
+
+    @staticmethod
+    def _youtube_account_url(value):
+        text = str(value or '').strip()
+        match = re.search(r'https?://(?:www\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)', text, re.I)
+        if match:
+            return match.group(0).rstrip('/')
+        if re.fullmatch(r'@[A-Za-z0-9._-]{3,}', text):
+            return 'https://www.youtube.com/' + text
+        return ''
+
+    def _youtube_extract(self, url, request, flat=False, comments=False):
+        try:
+            import yt_dlp
+        except ImportError as exc:
+            raise RuntimeError('YouTube 采集组件未安装，请先安装 yt-dlp') from exc
+        maximum = int(request.get('max_items') or 50)
+        maximum = 500 if maximum < 0 else min(500, max(1, maximum))
+        options = {'quiet': True, 'no_warnings': True, 'skip_download': True, 'socket_timeout': 30,
+                   'retries': 3, 'playlistend': maximum,
+                   'extract_flat': 'in_playlist' if flat else False}
+        if comments:
+            options.update(getcomments=True, max_comments={'all': [int(request.get('max_items') or 50)]})
+        proxies = request.get('proxies') or []
+        if proxies:
+            proxy = str(proxies[0]).strip()
+            options['proxy'] = proxy if '://' in proxy else 'http://' + proxy
+        try:
+            with yt_dlp.YoutubeDL(options) as downloader:
+                return downloader.extract_info(url, download=False) or {}
+        except Exception as exc:
+            raise RuntimeError(f'YouTube 暂时无法访问：{str(exc).splitlines()[-1][:240]}') from exc
+
+    @staticmethod
+    def _youtube_video_row(info):
+        return CrawlerTaskManager._fill_youtube_row({key: '' for key in BUILTIN_FIELDS['youtube']}, info or {})
+
+    def _discover_youtube_data(self, value, request, task_id=None):
+        mode = str(request.get('youtube_mode') or 'keyword').lower()
+        maximum = int(request.get('max_items') or 50)
+        maximum = 500 if maximum < 0 else min(500, max(1, maximum))
+        if mode == 'keyword':
+            return self._discover_youtube_urls(value, request, task_id)
+        if mode == 'comments':
+            video_url = str(value or '').strip()
+            if not re.match(r'https?://(?:www\.)?(?:youtube\.com/watch\?[^\s]*v=|youtu\.be/)', video_url, re.I):
+                raise ValueError('请输入完整的 YouTube 视频链接')
+            info = self._youtube_extract(video_url, request, comments=True)
+            rows = []
+            for index, item in enumerate(info.get('comments') or [], 1):
+                author = str(item.get('author') or item.get('author_id') or '')
+                text = str(item.get('text') or '').strip()
+                if not text: continue
+                cid = str(item.get('id') or index)
+                rows.append({'author': author, 'username': item.get('author_id') or '', 'text': text,
+                             'published_at': item.get('timestamp') or item.get('time_text') or '',
+                             'likes': item.get('like_count', ''), 'replies': item.get('reply_count', ''),
+                             'url': f'{video_url}#comment-{cid}'})
+                if len(rows) >= maximum: break
+            if not rows: raise RuntimeError('YouTube 未返回可公开读取的评论')
+            return [{'url': row['url'], 'detail_url': '', 'prefill': row} for row in rows]
+        account_url = self._youtube_account_url(value)
+        if not account_url: raise ValueError('请输入 YouTube 账号，例如 @YouTube 或频道链接')
+        extract_url = account_url.rstrip('/') + '/videos' if mode == 'videos' and not account_url.rstrip('/').endswith('/videos') else account_url
+        info = self._youtube_extract(extract_url, request, flat=(mode == 'videos'))
+        if mode == 'user':
+            row = {'username': info.get('channel_id') or info.get('uploader_id') or account_url.rsplit('/', 1)[-1],
+                   'display_name': info.get('channel') or info.get('uploader') or info.get('title') or '',
+                   'bio': info.get('description') or '', 'followers': info.get('channel_follower_count', ''),
+                   'videos': info.get('playlist_count') or info.get('channel_video_count', ''),
+                   'verified': info.get('channel_is_verified', ''), 'avatar': info.get('channel_thumbnail') or info.get('thumbnail') or '', 'url': account_url}
+            return [{'url': account_url, 'detail_url': '', 'prefill': row}]
+        targets = []
+        for entry in info.get('entries') or []:
+            if not entry: continue
+            url = str(entry.get('webpage_url') or entry.get('url') or '')
+            if not url.startswith('http') and entry.get('id'): url = f'https://www.youtube.com/watch?v={entry["id"]}'
+            if not url: continue
+            row = self._youtube_video_row(entry); row['url'] = url
+            targets.append({'url': url, 'detail_url': '', 'prefill': row})
+            if len(targets) >= maximum: break
+        if not targets: raise RuntimeError('YouTube 未返回该账号的公开视频')
+        return targets
 
     @staticmethod
     def _twitter_username(value):
@@ -2084,11 +2195,53 @@ class CrawlerTaskManager:
             }}]
         return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
 
+    def _discover_douyin_data(self, value, request, task_id=None):
+        from .douyin_profiles import aweme_comments, discover_profiles, search_awemes, user_awemes
+        mode = str(request.get("tiktok_mode") or "keyword").lower()
+        requested = int(request.get("max_items") or 50)
+        maximum = 500 if requested < 0 else min(500, max(1, requested))
+        if task_id:
+            labels = {"keyword": "搜索关键词视频", "comments": "读取视频评论", "user": "读取账号信息", "videos": "读取账号视频"}
+            self._update(task_id, status="running", message=f"正在抖音{labels.get(mode, '采集')}", progress=10)
+        if mode == "user":
+            return discover_profiles(value, request)
+        if mode == "comments":
+            video_url = self._tiktok_video_url(value)
+            match = re.search(r"/video/(\d+)", video_url)
+            if not video_url or not match:
+                raise ValueError("请输入完整的抖音视频链接")
+            rows = aweme_comments(match.group(1), video_url, request, maximum)
+            if not rows:
+                raise RuntimeError("抖音未返回公开评论；请确认视频可访问并提供有效登录 Cookie 后重试")
+            return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
+        if mode == "videos":
+            profiles = discover_profiles(value, request)
+            targets = []
+            for profile in profiles:
+                sec_uid = unquote(urlparse(profile["url"]).path.rsplit('/', 1)[-1])
+                rows = user_awemes(sec_uid, request, maximum)
+                for row in rows:
+                    targets.append({"url": row["url"], "detail_url": "", "prefill": row})
+            if not targets:
+                raise RuntimeError("抖音未返回账号公开视频；请确认账号主页与登录 Cookie 有效")
+            return targets[:maximum]
+        direct = self._tiktok_video_url(value)
+        if direct:
+            try:
+                row = self._tiktok_video_row(self._tiktok_extract(direct, request))
+            except RuntimeError:
+                row = {"url": direct}
+            row["url"] = row.get("url") or direct
+            return [{"url": direct, "detail_url": "", "prefill": row}]
+        rows = search_awemes(str(value or "").strip(), request, maximum)
+        if not rows:
+            raise RuntimeError("抖音未返回关键词视频；请提供有效登录 Cookie 后重试")
+        return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
+
     def _discover_tiktok_data(self, value, request, task_id=None):
         mode = str(request.get("tiktok_mode") or "keyword").lower()
-        if request.get("source") == "douyin" and mode == "user":
-            from .douyin_profiles import discover_profiles
-            return discover_profiles(value, request)
+        if request.get("source") == "douyin":
+            return self._discover_douyin_data(value, request, task_id)
         if mode == "user":
             return self._discover_tiktok_user(value, request, task_id)
         if mode == "videos":
@@ -2530,10 +2683,12 @@ class CrawlerTaskManager:
             "source": source, "urls": urls, "keyword": keyword, "account_name": account_name,
             "twitter_mode": str(payload.get("twitter_mode") or "keyword"),
             "tiktok_mode": str(payload.get("tiktok_mode") or "keyword"),
+            "youtube_mode": str(payload.get("youtube_mode") or "keyword"),
             "telegram_mode": str(payload.get("telegram_mode") or "channel"),
             "telegram_api_id": str(payload.get("telegram_api_id") or "").strip(),
             "telegram_api_hash": str(payload.get("telegram_api_hash") or "").strip(),
             "telegram_session": str(payload.get("telegram_session") or "").strip(),
+            "douyin_cookie": str(payload.get("douyin_cookie") or "").strip(),
             "proxies": payload.get("proxies") or [], "dynamic": bool(payload.get("dynamic")),
             "max_items": sample_size,
             "delay_seconds": max(0.2, float(payload.get("delay_seconds") or 0.4)),
@@ -2543,7 +2698,7 @@ class CrawlerTaskManager:
         # 前端明确传入 fields（包括空数组）时必须严格遵守，不能用默认字段
         # 回填，否则“选择要保存的内容”和预览会出现不一致。
         fields = payload.get("fields") if "fields" in payload else self.builtin_fields(
-            source, request["twitter_mode"], request["tiktok_mode"], request["telegram_mode"]
+            source, request["twitter_mode"], request["tiktok_mode"], request["telegram_mode"], request["youtube_mode"]
         )
         fields = [field for field in fields if not isinstance(field, dict) or field.get("enabled", True) is not False]
         if not fields:
@@ -2582,7 +2737,7 @@ class CrawlerTaskManager:
             targets.extend(url for url in urls if url not in known)
             targets = targets[:sample_size]
         elif source == "youtube":
-            targets = self._discover_youtube_urls(keyword, request)[:sample_size]
+            targets = self._discover_youtube_data(keyword, request)[:sample_size]
         elif source == "twitter":
             targets = self._discover_twitter_posts(keyword, request)[:sample_size]
         elif source in ("tiktok", "douyin"):
@@ -2981,11 +3136,11 @@ class CrawlerTaskManager:
         task_dir.mkdir(parents=True, exist_ok=True)
         task = self.tasks.get(task_id) or {}
         reuse_youtube_targets = task.pop("_retry_youtube_targets", False)
-        request = task.get("request", {})
+        request = {**task.get("request", {}), **getattr(self, "task_secrets", {}).get(task_id, {})}
         rows, errors = [], []
         try:
             source = request.get("source", "generic")
-            download_videos = bool(request.get("download_videos", True)) and (source == "youtube" or (source in ("tiktok", "douyin") and request.get("tiktok_mode") in ("keyword", "videos")))
+            download_videos = bool(request.get("download_videos", True)) and ((source == "youtube" and request.get("youtube_mode", "keyword") in ("keyword", "videos")) or (source in ("tiktok", "douyin") and request.get("tiktok_mode") in ("keyword", "videos")))
             videos_dir = task_dir / "videos" if download_videos else None
             unit = {"news": "篇新闻", "wechat": "篇文章", "youtube": "个视频",
                     "twitter": "条推文", "tiktok": "个视频", "telegram": "条消息"}.get(source, "个网页")
@@ -3015,7 +3170,7 @@ class CrawlerTaskManager:
                 if reuse_youtube_targets and targets_file.is_file():
                     urls = json.loads(targets_file.read_text("utf-8"))
                 else:
-                    urls = self._discover_youtube_urls(request.get("keyword", ""), request, task_id)
+                    urls = self._discover_youtube_data(request.get("keyword", ""), request, task_id)
                     targets_file.write_text(json.dumps(urls, ensure_ascii=False), "utf-8")
             elif source == "twitter":
                 urls = self._discover_twitter_posts(request.get("keyword", ""), request, task_id)
@@ -3254,6 +3409,7 @@ class CrawlerTaskManager:
             task = self.tasks.pop(task_id, None)
             if not task: return False
             if task_id in self.controls: self.controls[task_id]["cancelled"] = True
+            self.task_secrets.pop(task_id, None)
             self._save()
         shutil.rmtree(self.data_dir / task_id, ignore_errors=True); return True
 

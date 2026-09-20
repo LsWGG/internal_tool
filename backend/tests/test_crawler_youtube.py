@@ -74,6 +74,28 @@ class YoutubeDownloadTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, '未生成完整文件'):
                 self.download()
 
+    def test_keyword_network_error_is_presented_without_transport_details(self):
+        import requests
+        self.manager._request = MagicMock(side_effect=requests.ConnectionError('dns unavailable'))
+        with self.assertRaisesRegex(RuntimeError, 'YouTube 搜索暂时无法连接'):
+            self.manager._discover_youtube_urls('OpenAI', {'max_items': 2})
+
+    def test_youtube_modes_map_comments_user_and_account_videos(self):
+        comment_info = {'comments': [{'id': 'c1', 'author': 'Alice', 'author_id': 'alice', 'text': 'Nice', 'like_count': 2}]}
+        self.manager._youtube_extract = MagicMock(return_value=comment_info)
+        comments = self.manager._discover_youtube_data('https://youtu.be/GE0pFiFJTKo', {'youtube_mode': 'comments', 'max_items': 10})
+        self.assertEqual(comments[0]['prefill']['username'], 'alice')
+        self.manager._youtube_extract = MagicMock(return_value={'channel_id': 'UC1', 'channel': 'Demo', 'channel_follower_count': 9})
+        user = self.manager._discover_youtube_data('@DemoChannel', {'youtube_mode': 'user', 'max_items': 10})
+        self.assertEqual(user[0]['prefill']['followers'], 9)
+        self.manager._youtube_extract = MagicMock(return_value={'entries': [{'id': 'GE0pFiFJTKo', 'title': 'Video'}]})
+        videos = self.manager._discover_youtube_data('@DemoChannel', {'youtube_mode': 'videos', 'max_items': 10})
+        self.assertEqual(videos[0]['url'], 'https://www.youtube.com/watch?v=GE0pFiFJTKo')
+
+    def test_youtube_mode_fields_are_specific(self):
+        self.assertIn('followers', [item['name'] for item in self.manager.builtin_fields('youtube', youtube_mode='user')])
+        self.assertEqual([item['name'] for item in self.manager.builtin_fields('youtube', youtube_mode='comments')], ['author', 'username', 'text', 'published_at', 'likes', 'replies', 'url'])
+
     def test_retry_reuses_targets_but_next_scheduled_run_searches_again(self):
         task_dir = self.directory / 'test'
         task_dir.mkdir()

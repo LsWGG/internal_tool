@@ -117,6 +117,7 @@ def execute_ai_action(payload: dict):
         defaults = crawler_manager.builtin_fields(
             values.get("source", "generic"), values.get("twitter_mode", "keyword"),
             values.get("tiktok_mode", "keyword"), values.get("telegram_mode", "channel"),
+            values.get("youtube_mode", "keyword"),
         )
         default_by_name = {field.get("name"): field for field in defaults}
         fields = [default_by_name.get(name, {"name": name, "selector": "", "attribute": "text", "builtin": False}) for name in field_names]
@@ -1335,8 +1336,9 @@ def crawler_sql_test(payload: dict):
 
 @app.get("/api/crawler/fields")
 def crawler_builtin_fields(source: str = "generic", twitter_mode: str = "keyword",
-                           tiktok_mode: str = "keyword", telegram_mode: str = "channel"):
-    return crawler_manager.builtin_fields(source, twitter_mode, tiktok_mode, telegram_mode)
+                           tiktok_mode: str = "keyword", telegram_mode: str = "channel",
+                           youtube_mode: str = "keyword"):
+    return crawler_manager.builtin_fields(source, twitter_mode, tiktok_mode, telegram_mode, youtube_mode)
 
 
 @app.get("/api/crawler/capabilities")

@@ -1,9 +1,11 @@
 import json
+import base64
+import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from app.crawler_manager import CrawlerTaskManager
-from app.douyin_profiles import _douyin_host, profile_link_rows, profile_rows
+from app.douyin_profiles import _cookie_values, _douyin_host, _profile_query, aweme_comments, search_awemes, user_awemes, enrich_profile, profile_index_rows, profile_link_rows, profile_rows
 
 
 class TikTokCrawlerTests(unittest.TestCase):
@@ -141,6 +143,106 @@ class TikTokCrawlerTests(unittest.TestCase):
         ], "@人民日报")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["url"], "https://www.douyin.com/user/sec-rmrb")
+
+    def test_douyin_profile_search_uses_only_exact_public_index_title(self):
+        real_url = "https://www.douyin.com/user/sec-rmrb"
+        bing_url = "https://www.bing.com/ck/a?u=a1" + base64.urlsafe_b64encode(real_url.encode()).decode().rstrip("=")
+        rows = profile_index_rows([
+            {"href": "https://www.douyin.com/user/sec-health", "text": "人民日报健康客户端 - 抖音"},
+            {"href": bing_url, "text": "人民日报的抖音 - 抖音"},
+        ], "人民日报")
+        self.assertEqual([row["url"] for row in rows], [real_url])
+
+    def test_douyin_keyword_search_flattens_aweme_info_and_paginates(self):
+        pages = [
+            {"data": [{"aweme_info": {"aweme_id": "1", "desc": "first", "author": {"nickname": "A", "unique_id": "a"}, "statistics": {"play_count": 2}}}], "has_more": 1, "cursor": 20},
+            {"data": [{"aweme_info": {"aweme_id": "2", "desc": "second", "author": {"nickname": "B", "unique_id": "b"}, "statistics": {"digg_count": 3}}}], "has_more": 0, "cursor": 40},
+        ]
+        with patch('app.douyin_profiles._request_payload', side_effect=pages) as request:
+            rows = search_awemes("demo", {"douyin_cookie": "x=1"}, 2)
+        self.assertEqual([row["url"] for row in rows], ["https://www.douyin.com/video/1", "https://www.douyin.com/video/2"])
+        self.assertEqual(rows[0]["views"], 2)
+        self.assertEqual(rows[1]["likes"], 3)
+        self.assertEqual(request.call_count, 2)
+
+    def test_douyin_account_videos_use_sec_uid_cursor_pages(self):
+        with patch('app.douyin_profiles._request_payload', return_value={
+            "aweme_list": [{"aweme_id": "3", "desc": "post", "author": {"nickname": "人民日报"}}],
+            "has_more": 0, "max_cursor": 0,
+        }) as request:
+            rows = user_awemes("sec-rmrb", {"douyin_cookie": "x=1"}, 10)
+        self.assertEqual(rows[0]["url"], "https://www.douyin.com/video/3")
+        self.assertEqual(request.call_args.args[0], "/aweme/v1/web/aweme/post/")
+        self.assertEqual(request.call_args.args[1]["sec_user_id"], "sec-rmrb")
+
+    def test_douyin_comments_map_and_page_with_cursor(self):
+        with patch('app.douyin_profiles._request_payload', return_value={
+            "comments": [{"cid": "9", "text": "很好", "create_time": 1700000000, "digg_count": 4,
+                          "reply_comment_total": 1, "user": {"nickname": "用户", "unique_id": "user"}}],
+            "has_more": 0, "cursor": 0,
+        }) as request:
+            rows = aweme_comments("123", "https://www.douyin.com/video/123", {"douyin_cookie": "x=1"}, 10)
+        self.assertEqual(rows[0]["username"], "user")
+        self.assertEqual(rows[0]["url"], "https://www.douyin.com/video/123#comment-9")
+        self.assertEqual(request.call_args.args[0], "/aweme/v1/web/comment/list/")
+        self.assertEqual(request.call_args.args[1]["aweme_id"], "123")
+
+    def test_douyin_dispatches_each_mode_to_signed_flow(self):
+        self.manager._discover_douyin_data = Mock(return_value=["douyin"])
+        self.assertEqual(self.manager._discover_tiktok_data("x", {"source": "douyin", "tiktok_mode": "keyword"}), ["douyin"])
+        self.manager._discover_douyin_data.assert_called_once()
+
+    def test_douyin_cookie_enriches_profile_without_exposing_cookie(self):
+        response = Mock()
+        response.content = b'{}'
+        response.json.return_value = {"user": {"sec_uid": "sec-rmrb", "unique_id": "rmrb", "nickname": "人民日报", "signature": "新闻", "verified": True, "avatar_larger": {"url_list": ["https://img/avatar"]}}, "user_stats": {"follower_count": 2, "following_count": 3, "aweme_count": 4, "total_favorited": 5}}
+        row = {"username": "sec-rmrb", "display_name": "人民日报", "bio": "", "followers": "", "following": "", "videos": "", "likes": "", "verified": "", "avatar": "", "url": "https://www.douyin.com/user/sec-rmrb"}
+        session = Mock()
+        session.get.return_value = response
+        with patch('app.douyin_profiles.requests.Session', return_value=session):
+            enriched = enrich_profile(row, {"douyin_cookie": "sessionid=secret; msToken=token"})
+        self.assertEqual((enriched["followers"], enriched["videos"], enriched["likes"]), (2, 4, 5))
+        self.assertEqual(enriched["avatar"], "https://img/avatar")
+        self.assertIn("X-Bogus=", session.get.call_args.args[0])
+        self.assertNotIn("secret", session.get.call_args.args[0])
+        session.close.assert_called_once()
+
+    def test_douyin_profile_request_uses_browser_query_and_cookie_ms_token(self):
+        cookies = _cookie_values("ttwid=abc; msToken=already-present; malformed")
+        query = _profile_query("sec-rmrb", cookies)
+        self.assertEqual(query["sec_user_id"], "sec-rmrb")
+        self.assertEqual(query["msToken"], "already-present")
+        self.assertEqual(query["channel"], "channel_pc_web")
+        self.assertEqual(query["browser_name"], "Chrome")
+
+    def test_create_keeps_douyin_cookie_out_of_task_record(self):
+        manager = object.__new__(CrawlerTaskManager)
+        manager.lock = threading.RLock()
+        manager.tasks, manager.task_secrets, manager.controls = {}, {}, {}
+        manager.pool = Mock()
+        manager._save = Mock()
+        task = manager.create({
+            "source": "douyin", "tiktok_mode": "user", "keyword": "人民日报",
+            "douyin_cookie": "sessionid=secret", "fields": [{"name": "url"}],
+        })
+        stored = manager.tasks[task["id"]]
+        self.assertNotIn("douyin_cookie", stored["request"])
+        self.assertEqual(manager.task_secrets[task["id"]]["douyin_cookie"], "sessionid=secret")
+        self.assertNotIn("secret", json.dumps(stored, ensure_ascii=False))
+
+    def test_douyin_cookie_is_removed_from_public_task_and_delete_memory(self):
+        manager = object.__new__(CrawlerTaskManager)
+        manager.lock = threading.RLock()
+        manager.tasks = {"task": {"id": "task", "request": {"douyin_cookie": "secret"}}}
+        manager.task_secrets = {"task": {"douyin_cookie": "secret"}}
+        manager.controls = {"task": {"cancelled": False}}
+        manager.data_dir = __import__("pathlib").Path("/tmp/no-task-dir")
+        manager._save = Mock()
+        public = manager.public_task(manager.tasks["task"])
+        self.assertEqual(public["request"]["douyin_cookie"], "")
+        self.assertTrue(public["request"]["douyin_cookie_configured"])
+        self.assertTrue(manager.delete("task"))
+        self.assertNotIn("task", manager.task_secrets)
 
 
 if __name__ == "__main__":
