@@ -20,3 +20,17 @@ playwright>=1.50
 Telethon>=1.40
 croniter>=6,<7
 yt-dlp[default,deno]>=2026.8.19
+
+# 文件清洗工具专用。既有工具仍走 pandas/openpyxl，这里的栈只服务 clean_*。
+# polars[rt64] 要的是 64 位索引运行时：polars 默认装 polars-runtime-32，
+# 它按 32 位索引编译，GB 级数据要 64 位那版（polars 会优先加载 rt64，见 polars/_plr.py）。
+polars[rt64]>=1.40
+fastexcel>=0.21          # xlsx 读（Rust/calamine），比 openpyxl read_only 快 5-10 倍
+xlsxwriter>=3.2          # xlsx 写，constant_memory 模式内存恒定，不会像 openpyxl 那样落临时文件
+orjson>=3.12             # 子进程协议 / JSONL / 事件流的热路径
+faker>=40.0              # 随机生成的语义化生成器（姓名/地址/邮箱，带 locale）
+sse-starlette>=3.4       # SSE 响应，含心跳与断连检测
+google-re2>=1.1          # 用户正则的线性时间引擎，消除灾难性回溯
+httpx2>=2.13             # 仅为满足 starlette.testclient（testclient.py:33）；缺它整套后端测试无法导入
+charset-normalizer>=3.4  # 显式声明：此前只是 requests 的传递依赖，现在直接 import
+ruff>=0.16               # 「自定义 Python 函数」的格式化（clean_format.py 调 `python -m ruff`）

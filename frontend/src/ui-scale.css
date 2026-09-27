@@ -1,0 +1,106 @@
+/* Large-screen scale tokens. Imported last of the global sheets (see main.js).
+
+   This file only *defines tokens* and the breakpoint steps; the rules that consume
+   them live where they always have (style.css, ui-refinement.css, each component's
+   <style scoped>). That is deliberate — a later global sheet would silently outrank
+   every @media(max-width:…) rule in ui-refinement.css.
+
+   Guarantee: at scale 1, calc(Npx * 1) serializes back to "Npx", so below the first
+   breakpoint every converted declaration computes to exactly its old value. A literal
+   may only be swapped for a token when token(scale=1) equals that literal — that is
+   why .tile-viewer-workspace's 350px is NOT --ui-sidebar (400px). */
+
+:root{
+  /* Three independent factors: the approved width and type steps are not one multiple. */
+  --ui-scale:1;        /* type, controls, icons, rhythm */
+  --ui-frame:1;        /* content / shell / catalog widths */
+  --ui-stage-scale:1;  /* workbench stage height */
+
+  --ui-content-w:calc(1376px * var(--ui-frame));
+  --ui-shell-w:calc(1440px * var(--ui-frame));
+  --ui-stage-tall:calc(900px * var(--ui-stage-scale));
+
+  --fs-8:calc(8px * var(--ui-scale));
+  --fs-9:calc(9px * var(--ui-scale));
+  --fs-10:calc(10px * var(--ui-scale));
+  --fs-11:calc(11px * var(--ui-scale));
+  --fs-12:calc(12px * var(--ui-scale));
+  --fs-13:calc(13px * var(--ui-scale));
+  --fs-14:calc(14px * var(--ui-scale));
+  --fs-15:calc(15px * var(--ui-scale));
+  --fs-16:calc(16px * var(--ui-scale));
+  --fs-17:calc(17px * var(--ui-scale));
+  --fs-18:calc(18px * var(--ui-scale));
+  --fs-19:calc(19px * var(--ui-scale));
+  --fs-20:calc(20px * var(--ui-scale));
+  --fs-21:calc(21px * var(--ui-scale));
+  --fs-22:calc(22px * var(--ui-scale));
+  --fs-23:calc(23px * var(--ui-scale));
+  --fs-24:calc(24px * var(--ui-scale));
+  --fs-25:calc(25px * var(--ui-scale));
+  --fs-26:calc(26px * var(--ui-scale));
+  --fs-27:calc(27px * var(--ui-scale));
+  --fs-28:calc(28px * var(--ui-scale));
+  --fs-29:calc(29px * var(--ui-scale));
+  --fs-30:calc(30px * var(--ui-scale));
+  --fs-32:calc(32px * var(--ui-scale));
+  --fs-34:calc(34px * var(--ui-scale));
+  --fs-36:calc(36px * var(--ui-scale));
+  --fs-38:calc(38px * var(--ui-scale));
+  --fs-52:calc(52px * var(--ui-scale));
+  --fs-58:calc(58px * var(--ui-scale));
+
+  /* Portal catalog: 3 columns up to 1800, then 4, then 5. */
+  --ui-catalog-w:1320px;
+  --ui-catalog-cols:3;
+  --ui-catalog-gutter:max(24px, calc((100vw - var(--ui-catalog-w)) / 2));
+}
+
+/* ---------------------------------------------------------------- breakpoints */
+
+@media (min-width:1800px){
+  :root{
+    --ui-scale:1.10; --ui-frame:1.20; --ui-stage-scale:1.12;
+    --ui-catalog-w:1728px; --ui-catalog-cols:4;
+  }
+}
+@media (min-width:2400px){
+  :root{
+    --ui-scale:1.20; --ui-frame:1.42; --ui-stage-scale:1.25;
+    --ui-catalog-w:2170px; --ui-catalog-cols:5;
+  }
+}
+@media (min-width:3200px){
+  :root{
+    --ui-scale:1.30; --ui-frame:1.60; --ui-stage-scale:1.45;
+  }
+}
+
+/* The workbench stage also drinks the extra vertical room a large display has, which is
+   what actually buys more map tiles. Only assigned from 1800 up, so the 580px in
+   ui-refinement.css stands untouched below it.
+
+   The vh offsets are measured, not guessed, and are sized to the *worst* chrome of any page
+   that uses this token rather than to a typical one: 576px at 1920x1080, 620px at 2560x1440
+   and 700px at 3840x2160 (scaled type and header included), so each offset leaves a workbench
+   page that still fits without scrolling -- word-batch is the tall one, with 10px more chrome
+   than the map (its own header and status bar), which is what sets the 1800 offset. Where the
+   viewport is short for its width the floor wins and the page scrolls, as it already did.
+   es/nebula are the exception and stay scrolling pages at every size: their chrome is ~837px
+   of page content rather than furniture, and they overflowed by 450px at 1440 as well, so
+   fitting them would mean shrinking the workbench on every other page. */
+@media (min-width:1800px){
+  .ui-shell:not(.is-portal){--ui-stage-height:clamp(500px, calc(100dvh - 578px), 760px)}
+}
+@media (min-width:2400px){
+  .ui-shell:not(.is-portal){--ui-stage-height:clamp(720px, calc(100dvh - 620px), 1000px)}
+}
+@media (min-width:3200px){
+  .ui-shell:not(.is-portal){--ui-stage-height:clamp(880px, calc(100dvh - 700px), 1450px)}
+}
+
+/* Inherited from the retired 4K block in ui-refinement.css: panels that are not children of
+   a workbench (which sets 22px 24px !important) still get the roomier padding up here. */
+@media (min-width:1800px){
+  .ui-shell .panel{padding:calc(26px * var(--ui-scale))}
+}

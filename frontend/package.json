@@ -10,13 +10,22 @@
   },
   "dependencies": {
     "@6over3/zeroperl-ts": "1.0.10",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-python": "^6.2.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
     "@geoman-io/leaflet-geoman-free": "^2.18.3",
+    "@lezer/highlight": "^1.2.4",
     "@uswriting/exiftool": "1.0.9",
     "axios": "^1.8.4",
     "docx-preview": "^0.4.0",
     "fflate": "^0.8.3",
     "heic-to": "^1.5.2",
     "leaflet": "^1.9.4",
+    "markdown-it": "^15.0.2",
     "vue": "^3.5.13"
   },
   "devDependencies": {

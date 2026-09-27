@@ -345,10 +345,10 @@ onMounted(() => document.addEventListener('fullscreenchange', syncFullscreen))
 <style scoped>
 .mermaid-render-button{width:100%;margin-top:10px;padding:11px;border:1px solid #4169d8;border-radius:9px;color:#315fc8;background:#edf4ff;font-weight:700;cursor:pointer}
 button:disabled{opacity:.5;cursor:wait}
-.mermaid-guide{display:grid;gap:5px;margin:17px 0 0;padding:12px;border:1px solid #dce6f2;border-radius:9px;background:#f7faff;color:#687d96;font-size:11px;line-height:1.6}.mermaid-guide b{color:#42638b;font-size:11px}.mermaid-guide span{display:block}
-.mermaid-preview-count{padding:5px 8px;border-radius:6px;color:#5778a9;background:#edf4ff;font-size:10px;font-weight:700;white-space:nowrap}
-.mermaid-preview-body{grid-template-columns:250px minmax(0,1fr)}
-.mermaid-preview-body nav{display:flex;align-content:flex-start;flex-direction:column;gap:2px;max-height:650px;overflow-y:auto}
+.mermaid-guide{display:grid;gap:5px;margin:17px 0 0;padding:12px;border:1px solid #dce6f2;border-radius:9px;background:#f7faff;color:#687d96;font-size:var(--fs-11,11px);line-height:1.6}.mermaid-guide b{color:#42638b;font-size:var(--fs-11,11px)}.mermaid-guide span{display:block}
+.mermaid-preview-count{padding:5px 8px;border-radius:6px;color:#5778a9;background:#edf4ff;font-size:var(--fs-10,10px);font-weight:700;white-space:nowrap}
+.mermaid-preview-body{grid-template-columns:calc(250px * var(--ui-scale)) minmax(0,1fr)}
+.mermaid-preview-body nav{display:flex;align-content:flex-start;flex-direction:column;gap:2px;max-height:calc(650px * var(--ui-stage-scale));overflow-y:auto}
 .mermaid-preview-body nav button{display:flex;align-items:center;gap:9px;flex:0 0 44px;box-sizing:border-box;min-height:44px;height:44px;max-height:44px;padding:4px 8px;white-space:normal;margin:0;border:1px solid transparent;background:transparent;overflow:hidden;transition:background .15s,border-color .15s}
 .mermaid-preview-body nav button:hover{background:#edf3fb}
 .mermaid-preview-body nav button.active{border-color:#b6cbf3;background:#e7f0ff;box-shadow:inset 3px 0 #4169d8}
@@ -356,26 +356,26 @@ button:disabled{opacity:.5;cursor:wait}
 .mermaid-index{display:flex;width:28px;height:24px;margin:0;align-items:center;justify-content:center;flex:0 0 auto;border-radius:6px;background:#e8eef6;color:#7c91ac;font:600 11px ui-monospace,monospace}
 .active .mermaid-index{background:#4169d8;color:#fff}
 .mermaid-list-copy{display:block;min-width:0;margin:0;font:inherit;color:inherit;line-height:1}
-nav b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:1.2;margin:0;color:#38516f}
-nav small{display:block;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;line-height:1.2;font-weight:400;color:#5273a4}
+nav b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-13,13px);line-height:1.2;margin:0;color:#38516f}
+nav small{display:block;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:var(--fs-10,10px);line-height:1.2;font-weight:400;color:#5273a4}
 nav small.error{color:#c74545}
-.mermaid-canvas{position:relative;display:flex;min-height:450px;padding:0!important;overflow:hidden!important;background:#f7f9fc!important;touch-action:none;user-select:none}
+.mermaid-canvas{position:relative;display:flex;min-height:calc(450px * var(--ui-stage-scale));padding:0!important;overflow:hidden!important;background:#f7f9fc!important;touch-action:none;user-select:none}
 .mermaid-image-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:72px 40px 64px;overflow:hidden}
 .mermaid-image-stage img{display:block;max-width:100%!important;max-height:100%!important;width:auto;height:auto;object-fit:contain;background:#fff;box-shadow:0 8px 30px #28466418!important;transform-origin:center center;transition:transform .12s ease;will-change:transform;cursor:grab}
 .mermaid-canvas.dragging .mermaid-image-stage img{cursor:grabbing;transition:none}
 .mermaid-view-controls{position:absolute;z-index:3;top:16px;right:16px;display:flex;align-items:center;gap:4px;padding:5px;border:1px solid #d7e0ec;border-radius:10px;background:#fffffff2;box-shadow:0 5px 18px #294a701a;backdrop-filter:blur(8px)}
-.mermaid-view-controls button{display:grid;place-items:center;min-width:32px;height:30px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#385575;font-size:17px;line-height:1;cursor:pointer}
+.mermaid-view-controls button{display:grid;place-items:center;min-width:32px;height:30px;padding:0 8px;border:0;border-radius:6px;background:transparent;color:#385575;font-size:var(--fs-17,17px);line-height:1;cursor:pointer}
 .mermaid-view-controls button:hover{background:#eaf1fb;color:#315fc8}
 .mermaid-view-controls button:disabled{opacity:.35;cursor:default}
-.mermaid-view-controls .mermaid-zoom-value{min-width:54px;font-size:11px;font-weight:700}
+.mermaid-view-controls .mermaid-zoom-value{min-width:54px;font-size:var(--fs-11,11px);font-weight:700}
 .mermaid-view-controls i{width:1px;height:20px;margin:0 2px;background:#dce5ef}
 .mermaid-caption{position:absolute;z-index:2;left:50%;bottom:18px;transform:translateX(-50%);max-width:calc(100% - 80px);padding:7px 13px;border:1px solid #dce5ef;border-radius:8px;background:#fffffff0;color:#344f70;text-align:center;box-shadow:0 4px 14px #294a7012;pointer-events:none}
-.mermaid-caption b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+.mermaid-caption b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--fs-12,12px)}
 .mermaid-canvas:fullscreen{width:100vw;height:100vh;min-height:100vh;background:#f7f9fc!important}
 .mermaid-canvas:fullscreen .mermaid-image-stage{padding:72px 56px 70px}
 .mermaid-canvas:fullscreen .mermaid-image-stage img{max-width:calc(100vw - 112px)!important;max-height:calc(100vh - 142px)!important}
 .mermaid-canvas-state{text-align:center;color:#5d7290;max-width:100%;overflow-wrap:anywhere}
-.mermaid-canvas-state p{font-size:13px;line-height:1.8}
-.mermaid-sync{margin-top:12px;font-size:12px;color:#526986}
+.mermaid-canvas-state p{font-size:var(--fs-13,13px);line-height:1.8}
+.mermaid-sync{margin-top:12px;font-size:var(--fs-12,12px);color:#526986}
 @media(max-width:850px){.mermaid-preview-body{grid-template-columns:180px minmax(0,1fr)}.mermaid-preview-body nav{max-height:650px;padding:8px}.mermaid-preview-body nav button{flex-basis:44px;min-height:44px;height:44px;max-height:44px;gap:7px;padding:4px 7px}.mermaid-image-stage{padding:62px 18px 58px}.mermaid-view-controls{top:10px;right:10px}}
 </style>

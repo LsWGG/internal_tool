@@ -9,10 +9,17 @@ import ToolPortal from './ToolPortal.vue'
 import AiAssistant from './AiAssistant.vue'
 import TilePreviewTool from './TilePreviewTool.vue'
 import MermaidExportTool from './MermaidExportTool.vue'
+import CleanTool from './CleanTool.vue'
+import ExternalToolPage from './ExternalToolPage.vue'
+import SettingsDialog from './SettingsDialog.vue'
+import AmbientBackground from './AmbientBackground.vue'
 import {tileSources} from './tileSources'
+import {load as loadCatalog} from './catalogState'
 
-const iconPaths={geo:'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m0 0c3 3 4.5 6.3 4.5 10S15 19 12 22m0-20C9 5 7.5 8.3 7.5 12S9 19 12 22M2 12h20',map:'M4 19V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2m4-4 3-3 2 2 3-4',layers:'m12 3-9 5 9 5 9-5-9-5m-9 10 9 5 9-5m-18-5 9 5 9-5',data:'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3m0 0v5c0 1.7 3.6 3 8 3m8-8v5c0 .8-.8 1.5-2 2m-5 5h8m0 0-3-3m3 3-3 3',graph:'M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6m12 12a3 3 0 1 0 0 6 3 3 0 0 0 0-6M8.5 7.5l7 8',package:'M4 4h16v16H4V4m4 5 3 3-3 3m5 0h4',trend:'m3 17 6-6 4 4 8-9m-6 0h6v6',file:'M6 2h8l4 4v16H6V2m8 0v5h5M9 13h6m-6 4h6',word:'M5 3h10l4 4v14H5V3m10 0v5h5M8 11l1.5 6 2.5-4 2.5 4 1.5-6',image:'M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5m0 11 4-4 3 3 2-2 5 5M9 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3'}
+const iconPaths={geo:'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m0 0c3 3 4.5 6.3 4.5 10S15 19 12 22m0-20C9 5 7.5 8.3 7.5 12S9 19 12 22M2 12h20',map:'M4 19V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2m4-4 3-3 2 2 3-4',layers:'m12 3-9 5 9 5 9-5-9-5m-9 10 9 5 9-5m-18-5 9 5 9-5',data:'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3m0 0v5c0 1.7 3.6 3 8 3m8-8v5c0 .8-.8 1.5-2 2m-5 5h8m0 0-3-3m3 3-3 3',graph:'M6 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6m12 12a3 3 0 1 0 0 6 3 3 0 0 0 0-6M8.5 7.5l7 8',package:'M4 4h16v16H4V4m4 5 3 3-3 3m5 0h4',trend:'m3 17 6-6 4 4 8-9m-6 0h6v6',file:'M6 2h8l4 4v16H6V2m8 0v5h5M9 13h6m-6 4h6',word:'M5 3h10l4 4v14H5V3m10 0v5h5M8 11l1.5 6 2.5-4 2.5 4 1.5-6',image:'M4 5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5m0 11 4-4 3 3 2-2 5 5M9 8.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3',link:'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',gear:'M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4m11.4-11.4 1.4-1.4'}
 function AiIcon({name}){return h('svg',{class:'ai-icon',viewBox:'0 0 24 24','aria-hidden':'true'},[h('path',{d:iconPaths[name]||iconPaths.layers})])}
+// 分类的图标选择器就是这 12 个字形（与 AiIcon 同一份来源，零漂移）。
+const iconNames=Object.keys(iconPaths)
 
 const mapEl=ref(), map=ref(), layers=ref([]), tasks=ref([]), submitting=ref(false)
 const regionQuery=ref(''), regionResults=ref([]), searching=ref(false)
@@ -60,7 +67,10 @@ const crawlerTiktokActionLabel=computed(()=>({user:`采集${crawlerShortVideoLab
 const crawlerYoutubeActionLabel=computed(()=>({user:'采集 YouTube 账号信息',videos:'采集 YouTube 账号视频',comments:'采集 YouTube 视频评论',keyword:'搜索 YouTube 关键词视频'}[crawlerYoutubeMode.value]))
 const crawlerTelegramActionLabel=computed(()=>({channel:'采集频道消息',group:'采集群组消息',members:'采集群组成员',search:'全平台搜索'}[crawlerTelegramMode.value]))
 let propzoneMap, propzoneAreaLayers=[]
-const toasts=ref([]), confirmDialog=reactive({open:false,title:'确认操作',message:'',resolve:null})
+/* `note` / `confirmText` 让非删除的确认也能用这个弹窗。默认值仍是删除那套文案，所以
+   现有调用方一个字都不用改；而一个「取消任务」的弹窗要是写着「删除后无法恢复」、
+   按钮写着「确认删除」，那是在骗用户 —— 取消任务不删任何产物，还能续跑。 */
+const toasts=ref([]), confirmDialog=reactive({open:false,title:'确认操作',message:'',note:'删除后无法恢复',confirmText:'确认删除',resolve:null})
 const pdfTasks=ref([]),pdfUrls=ref(''),pdfFile=ref(null),pdfUploading=ref(false),pdfInput=ref(),pdfFilenameTemplate=ref('{index}_{host}')
 const pdfDetailTask=ref(null),pdfPreviewFile=ref(null),pdfPreviewNonce=ref(0),pdfFileQuery=ref('')
 const mdWordTasks=ref([]),mdWordFile=ref(null),mdWordInput=ref(),mdWordSubmitting=ref(false)
@@ -295,8 +305,12 @@ function notify(message,type='error',title=''){
   setTimeout(()=>{toasts.value=toasts.value.filter(item=>item.id!==id)},type==='error'?7000:3500)
 }
 const alert=(message)=>notify(message,'error')
-function ask(message,title='确认删除'){
-  return new Promise(resolve=>Object.assign(confirmDialog,{open:true,title,message,resolve}))
+function ask(message,title='确认删除',extra={}){
+  return new Promise(resolve=>Object.assign(confirmDialog,{
+    open:true,title,message,
+    note:extra.note||'删除后无法恢复',
+    confirmText:extra.confirmText||'确认删除',
+    resolve}))
 }
 function settleConfirm(result){const resolve=confirmDialog.resolve;confirmDialog.open=false;confirmDialog.resolve=null;resolve?.(result)}
 
@@ -340,6 +354,10 @@ watch(()=>[mapCategory.value,form.tile_source],switchMapType)
 
 function go(target){view.value=target;location.hash=target;window.scrollTo({top:0,left:0,behavior:'instant'});if(target==='map')nextTick(()=>map.value?.invalidateSize());if(target==='shp')nextTick(initShpMap);if(target==='propzone')nextTick(initPropzoneMap);if(target==='trending')loadTrendingDates();if(target==='md-word')loadMdWordTasks();if(target==='image-convert')loadImageTasks();if(target==='database')loadDatabaseTasks();if(target==='propzone')loadPropzoneTasks();if(target==='crawler')loadCrawlerFields()}
 function syncHash(){view.value=location.hash.slice(1)||'home';window.scrollTo({top:0,left:0,behavior:'instant'});if(view.value==='map')nextTick(()=>map.value?.invalidateSize());if(view.value==='shp')nextTick(initShpMap);if(view.value==='propzone')nextTick(initPropzoneMap);if(view.value==='trending')loadTrendingDates();if(view.value==='md-word')loadMdWordTasks();if(view.value==='image-convert')loadImageTasks();if(view.value==='database')loadDatabaseTasks();if(view.value==='propzone')loadPropzoneTasks();if(view.value==='crawler')loadCrawlerFields()}
+// Leaflet caches its container size, and nothing here ever told it the container changed, so a
+// window resize used to leave every map with grey strips until you navigated away and back.
+let mapResizeTimer=null
+function resizeMaps(){clearTimeout(mapResizeTimer);mapResizeTimer=setTimeout(()=>{for(const instance of [map.value,shpMap,propzoneMap,gjbMap]){const box=instance?._container;if(box&&box.isConnected)instance.invalidateSize({pan:false})}},150)}
 
 async function loadTrendingReport(date){trendingLoading.value=true;try{trendingReport.value=(await axios.get(`/api/github-trending/reports/${date}`)).data}catch(e){alert(e)}finally{trendingLoading.value=false}}
 async function loadTrendingFavorites(){try{trendingFavorites.value=(await axios.get('/api/github-trending/favorites')).data}catch(e){alert(e)}}
@@ -539,29 +557,47 @@ async function applyAiPatch(patch){
   }
   notify('AI 建议配置已填入，请确认后再执行。','success')
 }
+// 外链工具（设置弹窗里维护的那张表）。首页的工具目录、外链工具页和 AI 助手的页面名都用它。
+const links=ref([]),linksLoaded=ref(false),linksFailed=ref(false),settingsOpen=ref(false)
+async function loadLinks(){
+  try{links.value=(await axios.get('/api/links')).data.links||[];linksFailed.value=false}
+  catch(error){linksFailed.value=true;console.error(error)}   // 后端没起来时首页照常显示内置工具
+  finally{linksLoaded.value=true}
+}
+// 工具分类（设置弹窗里改过的顺序/名字/图标/归属）由 catalogState 自己读；它吞掉异常，
+// 读不到时合并视图就是代码里那 6 组 18 卡，首页照常能开。见 onMounted 的 Promise.all。
+// 路由就是 hash：#link:<id>。go()/syncHash() 原样搬运，不用为它加分支。
+const linkId=computed(()=>view.value.startsWith('link:')?view.value.slice(5):'')
+const currentLink=computed(()=>links.value.find(item=>item.id===linkId.value)||null)
+const pageName=computed(()=>currentLink.value?.name||'')
+function closeSettings(){settingsOpen.value=false;nextTick(()=>document.querySelector('.catalog-settings')?.focus())}
 onMounted(async()=>{
   const crawlerUsesMultipleAccounts=()=>crawlerSource.value==='twitter'&&['user','history'].includes(crawlerTwitterMode.value)||['tiktok','douyin'].includes(crawlerSource.value)&&['user','videos'].includes(crawlerTiktokMode.value)
   const syncCrawlerTargetInput=()=>{const control=document.querySelector('.crawler-keyword-step input,.crawler-keyword-step textarea');if(!control)return;const needsMultiline=crawlerUsesMultipleAccounts();if(needsMultiline&&control.tagName!=='TEXTAREA'){const area=document.createElement('textarea');area.className=control.className;area.rows=3;area.placeholder=['tiktok','douyin'].includes(crawlerSource.value)?`每行一个${crawlerShortVideoLabel.value}账号，例如：@账号1\n@账号2`:'每行一个 X 账号，例如：@OpenAI\n@GoogleAI';area.value=crawlerKeyword.value;area.addEventListener('input',e=>crawlerKeyword.value=e.target.value);control.replaceWith(area)}else if(!needsMultiline&&control.tagName==='TEXTAREA'){const input=document.createElement('input');input.className=control.className;input.placeholder=crawlerSource.value==='twitter'?'例如：地理信息 GIS':'请输入采集目标';input.value=crawlerKeyword.value;input.addEventListener('input',e=>crawlerKeyword.value=e.target.value);control.replaceWith(input)}}
   setTimeout(syncCrawlerTargetInput,300);watch([crawlerSource,crawlerTwitterMode,crawlerTiktokMode],()=>{crawlerKeyword.value='';setTimeout(syncCrawlerTargetInput,50)});
   window.addEventListener('hashchange',syncHash)
+  window.addEventListener('resize',resizeMaps)
   await nextTick(); map.value=L.map(mapEl.value,{zoomControl:true}).setView([31.23,121.47],11)
   demLayer=createDemLayer();switchMapType()
   map.value.pm.addControls({position:'topleft',drawMarker:false,drawCircle:false,drawCircleMarker:false,drawPolyline:false,drawPolygon:false,drawText:false,editMode:true,dragMode:false,cutPolygon:false,removalMode:true,rotateMode:false})
   map.value.on('pm:create',e=>{if(e.shape==='Rectangle')layers.value=[...layers.value,{layer:e.layer,layerId:mapLayerId(e.layer),geometry:null,name:null}]})
   map.value.on('pm:remove',e=>removeAreaByMapLayer(e.layer))
   map.value.on('layerremove',e=>removeAreaByMapLayer(e.layer))
-  await Promise.all([loadTasks(),loadDockerTasks(),loadGjbTasks(),loadEsTasks(),loadNebulaTasks(),loadVersions(),loadPdfTasks(),loadMdWordTasks(),loadImageTasks(),loadDatabaseTasks(),loadPropzoneTasks(),loadCrawlerTasks(),loadCrawlerCapabilities()]);if(view.value==='shp')await nextTick(initShpMap);if(view.value==='propzone')await nextTick(initPropzoneMap);if(view.value==='trending')await loadTrendingDates();if(view.value==='crawler')await loadCrawlerFields(); timer=setInterval(()=>{loadTasks();loadDockerTasks();loadGjbTasks();loadEsTasks();loadNebulaTasks();loadPdfTasks();loadMdWordTasks();loadImageTasks();loadDatabaseTasks();loadPropzoneTasks();loadCrawlerTasks()},2000)
+  await Promise.all([loadTasks(),loadDockerTasks(),loadGjbTasks(),loadEsTasks(),loadNebulaTasks(),loadVersions(),loadPdfTasks(),loadMdWordTasks(),loadImageTasks(),loadDatabaseTasks(),loadPropzoneTasks(),loadCrawlerTasks(),loadCrawlerCapabilities(),loadLinks(),loadCatalog()]);if(view.value==='shp')await nextTick(initShpMap);if(view.value==='propzone')await nextTick(initPropzoneMap);if(view.value==='trending')await loadTrendingDates();if(view.value==='crawler')await loadCrawlerFields(); timer=setInterval(()=>{loadTasks();loadDockerTasks();loadGjbTasks();loadEsTasks();loadNebulaTasks();loadPdfTasks();loadMdWordTasks();loadImageTasks();loadDatabaseTasks();loadPropzoneTasks();loadCrawlerTasks()},2000)
 })
-onBeforeUnmount(()=>{clearInterval(timer);window.removeEventListener('hashchange',syncHash);gjbMap?.remove();shpMap?.remove();propzoneMap?.remove()})
+onBeforeUnmount(()=>{clearInterval(timer);clearTimeout(mapResizeTimer);window.removeEventListener('hashchange',syncHash);window.removeEventListener('resize',resizeMaps);gjbMap?.remove();shpMap?.remove();propzoneMap?.remove()})
 </script>
 
 <template>
+  <AmbientBackground />
   <main class="ui-shell" :class="{'is-portal':view==='home'}">
     <div class="toast-stack" aria-live="polite"><TransitionGroup name="toast"><div v-for="item in toasts" :key="item.id" class="toast-card" :class="item.type"><div class="toast-icon">{{item.type==='success'?'✓':item.type==='info'?'i':'!'}}</div><div><b>{{item.title}}</b><p>{{item.message}}</p></div><button aria-label="关闭" @click="toasts=toasts.filter(x=>x.id!==item.id)">×</button></div></TransitionGroup></div>
-    <Teleport to="body"><Transition name="modal"><div v-if="confirmDialog.open" class="modal-mask" @click.self="settleConfirm(false)"><div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><div class="confirm-head"><div class="confirm-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8v9m4-9v9m4-9v9M5 5h14m-9-2h4l1 2m3 0-1 16H7L6 5"/></svg></div><div><h3 id="confirm-title">{{confirmDialog.title}}</h3><small>删除后无法恢复</small></div></div><p>{{confirmDialog.message}}</p><div class="confirm-actions"><button class="cancel-btn" @click="settleConfirm(false)">取消</button><button class="confirm-btn" @click="settleConfirm(true)">确认删除</button></div></div></div></Transition></Teleport>
+    <Teleport to="body"><Transition name="modal"><div v-if="confirmDialog.open" class="modal-mask" @click.self="settleConfirm(false)"><div class="confirm-card" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title"><div class="confirm-head"><div class="confirm-symbol"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8v9m4-9v9m4-9v9M5 5h14m-9-2h4l1 2m3 0-1 16H7L6 5"/></svg></div><div><h3 id="confirm-title">{{confirmDialog.title}}</h3><small>{{confirmDialog.note}}</small></div></div><p>{{confirmDialog.message}}</p><div class="confirm-actions"><button class="cancel-btn" @click="settleConfirm(false)">取消</button><button class="confirm-btn" @click="settleConfirm(true)">{{confirmDialog.confirmText}}</button></div></div></div></Transition></Teleport>
     <button v-if="view!=='home'" class="back-home" @click="go('home')">← 返回工具门户</button>
-    <ToolPortal v-if="view==='home'" :icon-component="AiIcon" @open="go" />
-    <AiAssistant :current-view="view" :context="aiContext" @navigate="go" @apply-config="applyAiPatch" />
+    <ToolPortal v-if="view==='home'" :icon-component="AiIcon" :links="links" @open="go" @settings="settingsOpen=true" />
+    <AiAssistant :current-view="view" :page-name="pageName" :context="aiContext" @navigate="go" @apply-config="applyAiPatch" />
+    <ExternalToolPage v-if="linkId&&linksLoaded" :tool="currentLink" :offline="linksFailed" />
+    <SettingsDialog v-if="settingsOpen" :links="links" :confirm-action="ask" :icon-component="AiIcon" :icon-names="iconNames" @close="closeSettings" @saved="loadLinks" />
     <TilePreviewTool v-if="view==='tile-viewer'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
     <section v-if="view==='crawler'" class="crawler-page" :class="{'crawler-account-mode':crawlerSource==='twitter'&&crawlerTwitterMode!=='keyword'}">
       <header class="crawler-hero"><div class="crawler-hero-copy"><div class="crawler-hero-symbol"><AiIcon name="layers" /></div><div><span class="eyebrow">SMART WEB COLLECTION</span><h1>智能网页采集</h1><p>按来源完成搜索、发现与字段提取，将公开内容整理为可交付数据。</p></div></div><div class="crawler-hero-pills"><span>公开数据</span><span>可视化选取</span><span>定时导出</span></div></header>
@@ -588,6 +624,7 @@ onBeforeUnmount(()=>{clearInterval(timer);window.removeEventListener('hashchange
     <WordBatchTool v-if="view==='word-batch'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
     <MermaidExportTool v-if="view==='mermaid-export'" @notify="(message,type)=>notify(message,type)" />
     <ImageMetadataTool v-if="view==='image-metadata'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
+    <CleanTool v-if="view==='clean'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
     <section v-if="view==='image-convert'" class="image-convert-page">
       <header><div><span class="eyebrow">IMAGE FORMAT CONVERTER</span><h1>图片格式转换</h1><p>批量转换 HEIC、JPEG、PNG、WebP、TIFF 等格式，保留照片元数据与目录结构。</p></div></header>
       <div class="image-convert-workspace">

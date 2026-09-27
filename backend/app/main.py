@@ -26,6 +26,9 @@ from .database_manager import DatabaseClient, DatabaseTaskManager
 from .propzone_manager import PropZoneTaskManager
 from .crawler_manager import CrawlerTaskManager
 from .word_batch_api import make_router as make_word_batch_router
+from .clean_api import make_router as make_clean_router
+from .links_api import make_router as make_links_router
+from .catalog_api import make_router as make_catalog_router
 from .ai_native import chat as ai_chat, capabilities as ai_capabilities
 from .ai_capabilities import validate_action
 import json
@@ -33,6 +36,9 @@ import zipfile
 
 app = FastAPI(title="地图数据下载服务", version="1.0.0")
 app.include_router(make_word_batch_router(Path(__file__).resolve().parents[1] / 'word_batch_data'))
+app.include_router(make_clean_router(Path(__file__).resolve().parents[1] / 'clean_data'))
+app.include_router(make_links_router(Path(__file__).resolve().parents[1] / 'links_data'))
+app.include_router(make_catalog_router(Path(__file__).resolve().parents[1] / 'catalog_data'))
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
                    allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 manager = TaskManager(Path(__file__).resolve().parents[1] / "data")
