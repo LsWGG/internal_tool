@@ -100,7 +100,7 @@ class NewsDiscoveryTests(unittest.TestCase):
             })
 
     def test_discovers_requested_fifty_items_across_pages(self):
-        def listing(url, _request):
+        def listing(url, _request, browser=None):
             page = 1
             tail = url.rstrip("/").rsplit("/", 1)[-1]
             if tail.isdigit():

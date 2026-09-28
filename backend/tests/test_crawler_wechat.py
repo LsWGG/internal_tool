@@ -2,10 +2,11 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import requests
 
+from app.crawler_adapters import wechat
 from app.crawler_manager import CrawlerTaskManager
 
 
@@ -78,15 +79,45 @@ class WechatScheduledCollectionTests(unittest.TestCase):
             )
         self.assertEqual(manager._request.call_count, 1)
 
+    def test_account_filter_reports_the_publishers_it_actually_saw(self):
+        """公众号名少一个字时，索引返回的全是别人的文章；报错必须说出实际发布方。"""
+        manager = object.__new__(CrawlerTaskManager)
+        manager._checkpoint = MagicMock()
+        manager._update = MagicMock()
+        response = requests.Response()
+        response.status_code = 200
+        response.url = "https://weixin.sogou.com/weixin?type=2&query=test&page=1"
+        response._content = '''
+          <ul class="news-list">
+            <li><div class="txt-box"><h3><a href="/link?url=one">标题一</a></h3>
+                <p class="account">果妈碎碎念</p></div></li>
+            <li><div class="txt-box"><h3><a href="/link?url=two">标题二</a></h3>
+                <p class="account">扬州妇幼</p></div></li>
+            <li><div class="txt-box"><h3><a href="/link?url=three">标题三</a></h3>
+                <p class="account">果妈碎碎念</p></div></li>
+          </ul>'''.encode()
+        response.encoding = "utf-8"
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+        manager._request = MagicMock(return_value=response)
+        with self.assertRaisesRegex(RuntimeError, "果妈碎碎念、扬州妇幼") as caught:
+            manager._discover_wechat_sogou_urls(
+                "给果果讲故事", {"max_items": 10, "proxies": [], "delay_seconds": 0}, "test"
+            )
+        # 第 1 页 0 条命中会继续翻第 2 页，两次都是同一份替身页面。
+        self.assertIn("6 条提及该名称的文章", str(caught.exception))
+
     def test_primary_verification_automatically_switches_to_mobile_index(self):
         manager = object.__new__(CrawlerTaskManager)
         manager.data_dir = Path(self.temp_directory())
-        manager._discover_wechat_sogou_urls = MagicMock(side_effect=RuntimeError("需要人工验证"))
+        manager._checkpoint = MagicMock()
+        manager._update = MagicMock()
         expected = [{"url": "https://mp.weixin.qq.com/s/article"}]
-        manager._discover_wechat_mobile_urls = MagicMock(return_value=expected)
-        self.assertEqual(
-            manager._discover_wechat_urls("测试公众号", {"max_items": 10}, None), expected
-        )
+        # 三级索引的降级在适配器内部完成，patch 目标随之落到适配器模块。
+        with patch.object(wechat, "sogou_urls", MagicMock(side_effect=RuntimeError("需要人工验证"))), \
+                patch.object(wechat, "mobile_urls", MagicMock(return_value=expected)):
+            self.assertEqual(
+                manager._discover_wechat_urls("测试公众号", {"max_items": 10}, None), expected
+            )
 
     def test_mobile_index_extracts_only_the_exact_account(self):
         manager = object.__new__(CrawlerTaskManager)
@@ -105,12 +136,11 @@ class WechatScheduledCollectionTests(unittest.TestCase):
         </ul>'''
         response.encoding = "utf-8"
         manager._request = MagicMock(return_value=response)
-        manager._resolve_sogou_wechat_url = MagicMock(
-            return_value="https://mp.weixin.qq.com/s/right"
-        )
-        result = manager._discover_wechat_mobile_urls(
-            "target", {"max_items": 1, "proxies": [], "delay_seconds": 0}, "test"
-        )
+        with patch.object(wechat, "resolve_sogou_url",
+                          MagicMock(return_value="https://mp.weixin.qq.com/s/right")):
+            result = manager._discover_wechat_mobile_urls(
+                "target", {"max_items": 1, "proxies": [], "delay_seconds": 0}, "test"
+            )
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["prefill"]["account"], "target")
         self.assertEqual(result[0]["prefill"]["title"], "right title")
@@ -123,15 +153,17 @@ class WechatScheduledCollectionTests(unittest.TestCase):
     def test_incremental_discovery_reuses_recent_success_to_avoid_ip_verification(self):
         manager = object.__new__(CrawlerTaskManager)
         manager.data_dir = Path(self.temp_directory())
+        manager._checkpoint = MagicMock()
         manager._update = MagicMock()
         expected = [{"url": "https://mp.weixin.qq.com/s/article"}]
-        manager._discover_wechat_sogou_urls = MagicMock(return_value=expected)
-        manager._discover_wechat_mobile_urls = MagicMock()
-        manager._discover_wechat_public_search_urls = MagicMock()
-        request = {"max_items": -1}
-        self.assertEqual(manager._discover_wechat_urls("测试公众号", request, "test"), expected)
-        self.assertEqual(manager._discover_wechat_urls("测试公众号", request, "test"), expected)
-        self.assertEqual(manager._discover_wechat_sogou_urls.call_count, 1)
+        sogou_urls = MagicMock(return_value=expected)
+        with patch.object(wechat, "sogou_urls", sogou_urls), \
+                patch.object(wechat, "mobile_urls", MagicMock()), \
+                patch.object(wechat, "public_search_urls", MagicMock()):
+            request = {"max_items": -1}
+            self.assertEqual(manager._discover_wechat_urls("测试公众号", request, "test"), expected)
+            self.assertEqual(manager._discover_wechat_urls("测试公众号", request, "test"), expected)
+        self.assertEqual(sogou_urls.call_count, 1)
 
 
 if __name__ == "__main__":

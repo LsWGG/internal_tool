@@ -18,6 +18,7 @@ openpyxl>=3.1
 geopandas>=1.0
 playwright>=1.50
 Telethon>=1.40
+gmssl>=3.2.2             # 抖音 a_bogus 签名要用的 SM3（douyin_abogus.py，纯 Python 实现）
 croniter>=6,<7
 yt-dlp[default,deno]>=2026.8.19
 

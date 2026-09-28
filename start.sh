@@ -16,21 +16,30 @@ if [[ -f "$ENV_FILE" ]]; then
   set +a
 fi
 
-if [[ ! -x "$PYTHON_BIN" ]]; then
-  if ! command -v uv >/dev/null 2>&1; then
-    echo "错误：未找到 uv，无法创建项目专属虚拟环境。" >&2
-    echo "请安装 uv：https://docs.astral.sh/uv/" >&2
-    exit 1
-  fi
-  echo "首次启动，正在使用 uv 创建项目虚拟环境……"
-  (cd "$PROJECT_ROOT" && uv venv .venv)
-  echo "正在安装后端依赖……"
-  (cd "$PROJECT_ROOT" && uv pip install --python "$PYTHON_BIN" -r backend/requirements.txt)
-fi
-
 if [[ ! -f "$BACKEND_DIR/requirements.txt" ]]; then
   echo "错误：未找到后端依赖文件：$BACKEND_DIR/requirements.txt" >&2
   exit 1
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "错误：未找到 uv，无法管理项目专属虚拟环境。" >&2
+  echo "请安装 uv：https://docs.astral.sh/uv/" >&2
+  exit 1
+fi
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "首次启动，正在使用 uv 创建项目虚拟环境……"
+  (cd "$PROJECT_ROOT" && uv venv .venv)
+fi
+
+# 只判断虚拟环境是否存在，会漏掉 requirements.txt 后续新增的依赖（clean_*
+# 用到的 sse-starlette、polars 等就是这么漏掉的）。按内容哈希比对，清单变了才装。
+REQ_STAMP="$PROJECT_ROOT/.venv/.requirements.sha256"
+REQ_HASH="$(shasum -a 256 "$BACKEND_DIR/requirements.txt" | awk '{print $1}')"
+if [[ ! -f "$REQ_STAMP" ]] || [[ "$(cat "$REQ_STAMP")" != "$REQ_HASH" ]]; then
+  echo "正在安装后端依赖……"
+  (cd "$PROJECT_ROOT" && uv pip install --python "$PYTHON_BIN" -r backend/requirements.txt)
+  printf '%s\n' "$REQ_HASH" > "$REQ_STAMP"
 fi
 
 # Playwright 的 Python 包与浏览器运行时分别安装。依赖升级后，旧缓存中的

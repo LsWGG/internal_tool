@@ -8,7 +8,6 @@ JSON-LD 和内置数据源模板；“AI 解析”在本地用页面语义规则
 from __future__ import annotations
 
 import csv
-import asyncio
 import io
 import html as html_lib
 import json
@@ -23,53 +22,27 @@ import uuid
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from .crawler_adapters import get_adapter
+from .crawler_adapters import douyin, get_adapter, news, telegram, tiktok, twitter, wechat, youtube
+from .crawler_adapters.base import DiscoverContext, ManagerHttpBridge
+# 这些纯函数搬到了适配器层，管理器继续以原名使用，避免大面积改名。
+from .crawler_adapters.util import (
+    clean_url, decode_response as _decode_response,
+    normalize_row_datetimes as _normalize_row_datetimes, safe_url as _safe_url,
+    structured_text as _structured_text, text as _text)
+from .crawler_browser import CrawlerBrowser, browser_scope
+from .crawler_fields import (BUILTIN_FIELDS, TELEGRAM_MEMBER_FIELDS, TIKTOK_COMMENT_FIELDS,
+                             TIKTOK_USER_FIELDS, TWITTER_USER_FIELDS,
+                             YOUTUBE_COMMENT_FIELDS, YOUTUBE_USER_FIELDS)
+from .crawler_http import UA_DESKTOP_FULL, CrawlerHttpClient, default_client
 from .crawler_schedule import next_runs
+from .crawler_secrets import GLOBAL_COOKIE_TASK_ID, load_secrets, write_secret
 from .crawler_sql_sink import validate_config as validate_sql_sink, write_rows as write_sql_rows
 
-
-BUILTIN_FIELDS = {
-    "generic": ["title", "description", "author", "published_at", "content", "image", "url"],
-    "news": ["title", "description", "author", "published_at", "content", "image", "source", "url"],
-    "twitter": ["text", "author", "published_at", "likes", "reposts", "replies", "media", "url"],
-    "tiktok": ["title", "description", "author", "username", "published_at", "duration", "views", "likes", "comments", "shares", "thumbnail", "url"],
-    "douyin": ["title", "description", "author", "username", "published_at", "duration", "views", "likes", "comments", "shares", "thumbnail", "url"],
-    "telegram": ["message_id", "text", "author", "published_at", "views", "forwards", "replies", "media", "chat", "url"],
-    "youtube": ["title", "description", "channel", "published_at", "duration", "views", "likes", "thumbnail", "url"],
-    "wechat": ["title", "author", "published_at", "content", "image", "account", "url"],
-}
-
-TWITTER_USER_FIELDS = [
-    "username", "display_name", "bio", "location", "followers", "following",
-    "posts", "joined_at", "verified", "avatar", "url",
-]
-
-TIKTOK_USER_FIELDS = [
-    "username", "display_name", "bio", "followers", "following", "videos",
-    "likes", "verified", "avatar", "url",
-]
-
-TIKTOK_COMMENT_FIELDS = [
-    "author", "username", "text", "published_at", "likes", "replies", "url",
-]
-
-YOUTUBE_USER_FIELDS = [
-    "username", "display_name", "bio", "followers", "videos", "verified", "avatar", "url",
-]
-
-YOUTUBE_COMMENT_FIELDS = [
-    "author", "username", "text", "published_at", "likes", "replies", "url",
-]
-
-TELEGRAM_MEMBER_FIELDS = [
-    "user_id", "username", "display_name", "bio", "bot", "verified", "status", "url",
-]
 
 SOURCE_NAMES = {
     "generic": "普通网页",
@@ -82,189 +55,9 @@ SOURCE_NAMES = {
     "wechat": "公众号文章",
 }
 
-BEIJING_TIMEZONE = timezone(timedelta(hours=8), name="CST")
-
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
-
-
-def _format_beijing_datetime(value):
-    """将页面中常见的 ISO 8601、Unix 时间戳和日期转为北京时间。
-
-    无时区的时间按北京本地时间处理；无法识别的内容保持原值，
-    避免把普通文字误转换为日期。
-    """
-    if value in (None, "") or isinstance(value, bool):
-        return value
-    parsed = None
-    if isinstance(value, datetime):
-        parsed = value
-    elif isinstance(value, (int, float)):
-        timestamp = float(value)
-        if abs(timestamp) > 10_000_000_000:
-            timestamp /= 1000
-        try:
-            parsed = datetime.fromtimestamp(timestamp, timezone.utc)
-        except (ValueError, OSError, OverflowError):
-            return value
-    else:
-        text = str(value).strip()
-        if not text:
-            return text
-        if re.fullmatch(r"\d{8}", text):
-            try:
-                parsed = datetime.strptime(text, "%Y%m%d")
-            except ValueError:
-                return value
-        elif re.fullmatch(r"\d{10}(?:\.\d+)?|\d{13}", text):
-            try:
-                timestamp = float(text)
-                if timestamp > 10_000_000_000:
-                    timestamp /= 1000
-                parsed = datetime.fromtimestamp(timestamp, timezone.utc)
-            except (ValueError, OSError, OverflowError):
-                return value
-        else:
-            normalized = text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text
-            try:
-                parsed = datetime.fromisoformat(normalized)
-            except ValueError:
-                try:
-                    parsed = parsedate_to_datetime(text)
-                except (TypeError, ValueError, OverflowError):
-                    return value
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=BEIJING_TIMEZONE)
-    else:
-        parsed = parsed.astimezone(BEIJING_TIMEZONE)
-    return parsed.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _normalize_row_datetimes(row, fields=None):
-    """统一一行采集结果中的内置时间和用户点选的 datetime 字段。"""
-    time_names = {"published_at", "created_at", "updated_at", "date", "time", "datetime", "timestamp"}
-    for field in fields or []:
-        if isinstance(field, str):
-            name, attribute, selector = field, "", ""
-        else:
-            name = str(field.get("name") or "")
-            attribute = str(field.get("attribute") or "")
-            selector = str(field.get("selector") or "")
-        builtin_name = selector.partition(":")[2] if selector.startswith("__builtin__:") else name
-        if attribute == "datetime" or builtin_name in time_names:
-            time_names.add(name)
-    for name in list(row):
-        lower_name = str(name).lower()
-        looks_like_time = (
-            name in time_names or lower_name in time_names
-            or lower_name.endswith(("_at", "_date", "_time", "datetime", "timestamp"))
-            or any(marker in str(name) for marker in ("发布时间", "创建时间", "更新时间", "日期"))
-        )
-        if looks_like_time:
-            row[name] = _format_beijing_datetime(row[name])
-    return row
-
-
-def _safe_url(value):
-    value = str(value or "").strip()
-    parsed = urlparse(value)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise ValueError(f"网址无效：{value}")
-    return value
-
-
-def _text(node):
-    return node.get_text(" ", strip=True) if node else ""
-
-
-def _structured_text(node):
-    """将正文节点转为保留段落、列表和表格换行的可读纯文本。"""
-    if not node:
-        return ""
-    document = BeautifulSoup(str(node), "html.parser")
-    for unwanted in document.select("script,style,noscript,template,svg"):
-        unwanted.decompose()
-    for br in document.select("br"):
-        br.replace_with("\n")
-    for cell in document.select("th,td"):
-        cell.insert_after("\t")
-    for item in document.select("li"):
-        item.insert_before("\n• ")
-        item.insert_after("\n")
-    for block in document.select("h1,h2,h3,h4,h5,h6,p,blockquote,pre,section,article,div,tr,ul,ol"):
-        block.insert_before("\n")
-        block.insert_after("\n")
-    lines = []
-    for raw_line in document.get_text("", strip=False).splitlines():
-        line = re.sub(r"[\t\f\v ]+", " ", raw_line).strip()
-        if line:
-            lines.append(line)
-    return "\n".join(lines)
-
-
-def _decode_response(response):
-    """按 BOM/页面声明优先解码，再做统计探测，避免 UTF-8 被误判为 GBK。"""
-    raw = response.content or b""
-    if raw.startswith(b"\xef\xbb\xbf"):
-        return raw.decode("utf-8-sig", errors="replace")
-    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
-        return raw.decode("utf-16", errors="replace")
-
-    def normalize(value):
-        value = str(value or "").strip().lower().replace("_", "-")
-        aliases = {"utf8": "utf-8", "gb2312": "gb18030", "gb-2312": "gb18030", "gbk": "gb18030"}
-        return aliases.get(value, value)
-
-    # HTML 自身的声明通常比 HTTP 默认值可靠；两者只要可严格解码便直接采用。
-    declared = []
-    head = raw[:16384].decode("ascii", errors="ignore")
-    for pattern in (
-        r"<meta[^>]+charset\s*=\s*[\"']?\s*([\w.-]+)",
-        r"<meta[^>]+content\s*=\s*[\"'][^\"']*charset\s*=\s*([\w.-]+)",
-        r"<\?xml[^>]+encoding\s*=\s*[\"']([\w.-]+)",
-    ):
-        match = re.search(pattern, head, re.I)
-        if match:
-            declared.append(normalize(match.group(1)))
-    header = str(response.headers.get("content-type") or "")
-    match = re.search(r"charset\s*=\s*[\"']?\s*([\w.-]+)", header, re.I)
-    if match:
-        declared.append(normalize(match.group(1)))
-    ignored_defaults = {"iso-8859-1", "latin-1", "ascii"}
-    for encoding in dict.fromkeys(declared):
-        if not encoding or encoding in ignored_defaults:
-            continue
-        try:
-            return raw.decode(encoding, errors="strict")
-        except (LookupError, UnicodeDecodeError):
-            continue
-
-    # 未声明编码时，使用 requests 已安装的 charset-normalizer/chardet 探测器。
-    apparent = normalize(getattr(response, "apparent_encoding", ""))
-    candidates = [apparent, "utf-8", "gb18030", "big5"]
-    unique = []
-    for encoding in candidates:
-        if encoding and encoding not in unique:
-            unique.append(encoding)
-    best_text, best_score = "", float("-inf")
-    for encoding in unique:
-        try:
-            text = raw.decode(encoding, errors="replace")
-        except (LookupError, UnicodeError):
-            continue
-        replacement = text.count("\ufffd")
-        controls = len(re.findall(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", text))
-        mojibake = len(re.findall(r"[ÃÂð]|锛|銆|鈥|涓[]|鏂伴椈|缇庡湅", text))
-        # 不再用“汉字数量”判断编码；UTF-8 误按 GBK 解码恰恰会制造更多伪汉字。
-        score = -replacement * 100 - controls * 40 - mojibake * 20
-        if encoding == apparent:
-            score += 8
-        if encoding == "utf-8":
-            score += 5
-        if score > best_score:
-            best_text, best_score = text, score
-    return best_text
 
 
 class CrawlerTaskManager:
@@ -278,6 +71,7 @@ class CrawlerTaskManager:
         self.task_secrets = {}
         self.active_runs = {}
         self._dynamic_hosts = set()
+        self.http = CrawlerHttpClient()
         try:
             self.tasks = json.loads(self.state_file.read_text("utf-8"))
         except (FileNotFoundError, json.JSONDecodeError):
@@ -482,6 +276,8 @@ class CrawlerTaskManager:
         task = self.get(task_id)
         if not task:
             raise ValueError("采集任务不存在")
+        request = task.get("request") or {}
+        source = request.get("source")
         database = self.data_dir / task_id / "cumulative.sqlite3"
         imported = set()
         if database.is_file():
@@ -512,10 +308,26 @@ class CrawlerTaskManager:
                 "SELECT payload FROM records ORDER BY collected_at, rowid")]
         finally:
             connection.close()
-        if not rows and source in ("tiktok", "douyin") and request.get("tiktok_mode") == "comments" and targets:
+        if not rows and source in ("tiktok", "douyin") and request.get("tiktok_mode") == "comments":
             # 评论接口受限时仍返回视频占位行，允许用户继续配置字段和创建任务。
-            rows = [{name: (url if name == "url" else "") for name in names}]
-            errors = []
+            #
+            # 这个分支此前引用的是方法里根本没有的 source/request/targets/names，
+            # 走到这儿必崩 NameError；现在按任务请求把目标和字段重新解出来
+            # （与 _discover_tiktok_comments 用 _tiktok_video_url 取视频链接同源）。
+            names = [str(field.get("name") if isinstance(field, dict) else field).strip()
+                     for field in request.get("fields") or []]
+            names = [name for name in dict.fromkeys(names) if name]
+            values = [request.get("keyword") or "", *(request.get("urls") or [])]
+            rows = []
+            for value in values:
+                # 只认解析得出的视频链接：解不出来的值（比如用户填了搜索词）不能
+                # 硬塞进 url 列冒充一条数据。
+                target = self._tiktok_video_url(value)
+                if not target:
+                    continue
+                row = {name: "" for name in names}
+                row["url"] = target          # 占位行至少要带上视频地址
+                rows.append(row)
         if not rows:
             raise ValueError("当前任务还没有可导出的累计数据")
         task_dir = self.data_dir / task_id
@@ -721,6 +533,8 @@ class CrawlerTaskManager:
             fields = self.builtin_fields(source, twitter_mode, tiktok_mode, telegram_mode, youtube_mode)
         proxies = [str(x).strip() for x in (payload.get("proxies") or []) if str(x).strip()]
         douyin_cookie = str(payload.get("douyin_cookie") or "").strip()
+        if source == "douyin" and not douyin_cookie:
+            douyin_cookie = self._saved_douyin_cookie()
         fmt = payload.get("output_format", "json")
         if fmt not in ("json", "csv", "xlsx", "jsonl", "postgresql", "video_zip"):
             fmt = "json"
@@ -784,6 +598,8 @@ class CrawlerTaskManager:
                 # Login state is only needed at execution time. Never write it
                 # into tasks.json, exports, or API task responses.
                 self.task_secrets[task_id] = {"douyin_cookie": douyin_cookie}
+                # 同时落盘一份（0o600），否则服务重启后任务会静默降级成匿名请求。
+                write_secret(self.data_dir, task_id, "douyin_cookie", douyin_cookie)
             self.controls[task_id] = {"paused": False, "cancelled": False}
             self._save()
         if cron:
@@ -792,1626 +608,154 @@ class CrawlerTaskManager:
             self.pool.submit(self._run, task_id)
         return self.public_task(record)
 
-    def _request(self, url, proxies, timeout=30, session=None, headers=None):
-        proxy = None
-        if proxies:
-            proxy = proxies[int(time.time() * 1000) % len(proxies)]
-            if not proxy.startswith(("http://", "https://", "socks5://")):
-                proxy = "http://" + proxy
-        request_headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/128 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
-        }
-        request_headers.update(headers or {})
-        client = session or requests
-        response = client.get(url, headers=request_headers,
-                              proxies={"http": proxy, "https": proxy} if proxy else None,
-                              timeout=timeout, allow_redirects=True)
-        response.raise_for_status()
-        return response
+    def _request(self, url, proxies, timeout=30, session=None, headers=None,
+                 retries=None, rate=True):
+        """请求咽喉：真正的行为在 `CrawlerHttpClient`（重试退避、按域名限流、代理轮换）。
+
+        这里刻意保留成一层薄委托 —— 测试会整体替换 `manager._request` 来隔离网络，
+        调用点也全部经由它，行为改动只需要落在 `crawler_http` 一个地方。
+        """
+        client = getattr(self, "http", None) or default_client()
+        return client.get(url, proxies or [], timeout=timeout, session=session,
+                          headers=headers, retries=retries, rate=rate)
 
     @staticmethod
     def _clean_url(value):
-        parsed = urlparse(str(value or ""))
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, ""))
+        """微信等调用点仍在用；实现在 crawler_adapters/util.py。"""
+        return clean_url(value)
 
-    @staticmethod
-    def _same_site(left, right):
-        def host(value):
-            return urlparse(value).netloc.lower().split(":")[0].removeprefix("www.")
-        return host(left) == host(right)
-
+    # 新闻的实现已经搬到 crawler_adapters/news.py，这里只留委托，
+    # 既有调用方（预览、任务运行、测试里的 patch）照旧。
     def _article_links(self, page_url, soup, selector=""):
-        """从新闻列表识别详情链接，排除栏目、翻页、登录和静态资源链接。"""
-        if selector:
-            selectors = [selector]
-        elif urlparse(page_url).netloc.lower().removeprefix("www.") == "cn.nytimes.com":
-            # 该站的栏目正文位于 sectionWrapper；推荐榜虽然也使用标题标签，
-            # 但在此容器之外，不能作为当前栏目文章采集。
-            selectors = [
-                ".sectionWrapper h1 a[href]", ".sectionWrapper h2 a[href]",
-                ".sectionWrapper h3 a[href]", ".sectionWrapper h4 a[href]",
-                # 服务端返回的精简 HTML 偶尔没有 sectionWrapper；通用选择器
-                # 作为降级，热门榜仍由 URL 和祖先容器规则排除。
-                "article a[href]", "h1 a[href]", "h2 a[href]", "h3 a[href]",
-                ".story a[href]", ".story-body a[href]", "li a[href]",
-            ]
-        else:
-            selectors = [
-                "main article a[href]", "main h1 a[href]", "main h2 a[href]", "main h3 a[href]",
-                "[role='main'] article a[href]", "[role='main'] h2 a[href]", "[role='main'] h3 a[href]",
-                "article a[href]", "h1 a[href]", "h2 a[href]", "h3 a[href]",
-                ".news-list a[href]", ".news_list a[href]", ".article-list a[href]",
-                ".article_list a[href]", ".list a[href]", ".content-list a[href]",
-                "li a[href]",
-            ]
-        anchors = []
-        for item in selectors:
-            try:
-                anchors.extend(soup.select(item))
-            except Exception:
-                continue
-        ignored_text = re.compile(r"^(首页|上一页|下一页|末页|更多|登录|注册|next|previous|prev|more|\d+)$", re.I)
-        ignored_path = re.compile(r"\.(?:jpg|jpeg|png|gif|svg|webp|css|js|pdf|zip|mp4)(?:$|\?)", re.I)
-        # 列表页的侧栏和页脚经常也使用 article/list 等类名。它们不是当前
-        # 栏目的文章，若不排除会造成“配置 50 条，第一页只凑出几十条”的假象。
-        ignored_sections = re.compile(
-            r"/(?:mostviewed|most-viewed|popular|recommended|recommend|topic|topics|"
-            r"slideshow|slideshows|interactive|video|videos|tag|tags)(?:/|$)", re.I,
-        )
-        found, seen = [], set()
-        for anchor in anchors:
-            href = str(anchor.get("href") or "").strip()
-            if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
-                continue
-            url = self._clean_url(urljoin(page_url, href))
-            if url in seen or url == self._clean_url(page_url) or not self._same_site(page_url, url) or ignored_path.search(url):
-                continue
-            text = _text(anchor)
-            if not text or ignored_text.match(text.strip()):
-                continue
-            parsed = urlparse(url)
-            path = parsed.path.lower()
-            if ignored_sections.search(path) or re.search(
-                    r"(?:^|[?&])utm_(?:source|campaign)=.*(?:most.?viewed|popular)",
-                    parsed.query, re.I):
-                continue
-            score = 0
-            if len(text.strip()) >= 8:
-                score += 1
-            if anchor.find_parent(["article", "h1", "h2", "h3"]):
-                score += 2
-            parent_classes = " ".join(sum((node.get("class", []) for node in anchor.parents if getattr(node, "attrs", None)), []))[:800].lower()
-            if re.search(r"sidebar|footer|nav(?:igation)?|most.?viewed|popular|hot.?story|recommend|related|pagination", parent_classes):
-                continue
-            if re.search(r"news|article|story|post|item|title|headline|content|list", parent_classes):
-                score += 1
-            if re.search(r"/(?:20\d{2}[/_-]\d{1,2}|20\d{6}|news|article|story|post|content)/", path):
-                score += 2
-            if re.search(r"\.(?:s?html?|aspx?)$", path):
-                score += 1
-            if parsed.query and re.search(r"(?:^|&)(?:page|p|start|offset)=\d+", parsed.query, re.I):
-                score -= 2
-            if score >= 2:
-                seen.add(url)
-                found.append(url)
-        return found
+        return news.article_links(page_url, soup, selector)
 
     def _next_news_page(self, page_url, soup, selector=""):
-        candidates = []
-        if selector:
-            try:
-                candidates.extend(soup.select(selector))
-            except Exception:
-                pass
-        candidates.extend(soup.select("a[rel='next'], link[rel='next']"))
-        for anchor in soup.select("a[href]"):
-            if re.fullmatch(r"\s*(?:下一页|下页|后页|next|next page)\s*(?:[>›»]+)?\s*|\s*[>›»]+\s*", _text(anchor), re.I):
-                candidates.append(anchor)
-        # 有些站点只显示页码，不提供 rel=next 或“下一页”文本。仅在明确的
-        # 分页容器内寻找大于当前页的最小页码，避免误把正文数字当作分页。
-        current_match = re.search(r"/page/(\d+)(?:/|$)", urlparse(page_url).path, re.I)
-        current_number = int(current_match.group(1)) if current_match else 1
-        numbered = []
-        for anchor in soup.select(
-                ".pagination a[href], .pager a[href], .paging a[href], nav[aria-label*='pag'] a[href]"):
-            text = _text(anchor).strip()
-            if text.isdigit() and int(text) > current_number:
-                numbered.append((int(text), anchor))
-        if numbered:
-            candidates.append(min(numbered, key=lambda item: item[0])[1])
-        # 兼容 /栏目/2/ 形式的纯数字分页。候选 URL 必须严格位于当前栏目
-        # 路径的下一层，防止把文章日期或导航数字误判为页码。
-        parsed_page = urlparse(page_url)
-        page_path = parsed_page.path
-        short_match = re.search(r"/(\d+)/?$", page_path)
-        short_current = int(short_match.group(1)) if short_match else 1
-        short_base = page_path[:short_match.start()] + "/" if short_match else page_path.rstrip("/") + "/"
-        short_numbered = []
-        for anchor in soup.select("a[href]"):
-            label = _text(anchor).strip()
-            if not label.isdigit() or int(label) <= short_current:
-                continue
-            candidate = self._clean_url(urljoin(page_url, anchor.get("href")))
-            candidate_path = urlparse(candidate).path
-            if re.fullmatch(re.escape(short_base) + r"\d+/", candidate_path):
-                short_numbered.append((int(label), anchor))
-        if short_numbered:
-            candidates.append(min(short_numbered, key=lambda item: item[0])[1])
-        for node in candidates:
-            href = node.get("href")
-            if href:
-                url = self._clean_url(urljoin(page_url, href))
-                if self._same_site(page_url, url) and url != self._clean_url(page_url):
-                    return url
-        # 目录型新闻栏目常采用 /section/page/N/，但首页不渲染可识别的
-        # 下一页控件。纽约时报中文网等站点即需要此回退。后续页无文章时，
-        # 发现循环在没有新增文章或出现重复页面时停止。
-        parsed = urlparse(page_url)
-        path = parsed.path
-        match = re.search(r"/page/(\d+)(/?)$", path, re.I)
-        if match:
-            next_path = path[:match.start(1)] + str(int(match.group(1)) + 1) + path[match.end(1):]
-        elif (parsed.netloc.lower().removeprefix("www.") == "cn.nytimes.com"
-              and (short_match := re.search(r"/(\d+)(/?)$", path))):
-            next_path = (path[:short_match.start(1)] + str(int(short_match.group(1)) + 1)
-                         + path[short_match.end(1):])
-        elif path.endswith("/") and not re.search(r"\.(?:s?html?|aspx?)$", path, re.I):
-            if parsed.netloc.lower().removeprefix("www.") == "cn.nytimes.com":
-                next_path = f"{path}2/"
-            else:
-                next_path = f"{path}page/2/"
-        else:
-            return ""
-        return urlunparse((parsed.scheme, parsed.netloc, next_path, parsed.params, parsed.query, ""))
+        return news.next_news_page(page_url, soup, selector)
 
-    def _fetch_listing_html(self, url, request):
-        """新闻列表优先尝试浏览器滚动，以兼容无限滚动；不可用时退回普通请求。"""
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as playwright:
-                launch = {"headless": True}
-                proxies = request.get("proxies") or []
-                if proxies:
-                    proxy = str(proxies[0]).strip()
-                    launch["proxy"] = {"server": proxy if "://" in proxy else "http://" + proxy}
-                browser = playwright.chromium.launch(**launch)
-                page = browser.new_page(viewport={"width": 1440, "height": 1000})
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
-                stable = 0
-                previous_height = 0
-                while True:
-                    for label in ("加载更多", "查看更多", "更多新闻", "Load more"):
-                        button = page.get_by_text(label, exact=False).last
-                        try:
-                            if button.is_visible(timeout=150):
-                                button.click(timeout=1000)
-                                break
-                        except Exception:
-                            pass
-                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                    page.wait_for_timeout(800)
-                    height = page.evaluate("document.body.scrollHeight")
-                    stable = stable + 1 if height == previous_height else 0
-                    previous_height = height
-                    if stable >= 2:
-                        break
-                    maximum = int(request.get("max_items") or 50)
-                    if maximum > 0 and len(self._article_links(
-                            url, BeautifulSoup(page.content(), "html.parser"),
-                            request.get("article_link_selector", ""))) >= maximum:
-                        break
-                content = page.content()
-                browser.close()
-                return content
-        except Exception:
-            return _decode_response(self._request(url, request.get("proxies", [])))
+    def _fetch_listing_html(self, url, request, browser=None):
+        return news.listing_html(url, request, browser, ManagerHttpBridge(self))
 
-    def _discover_news_urls(self, seeds, request, task_id=None):
-        maximum = int(request.get("max_items") or 50)
-        if maximum < 0: maximum = 10**9
-        queue, visited, articles = list(seeds), set(), []
-        while queue and len(articles) < maximum:
-            page_url = queue.pop(0)
-            if page_url in visited:
-                continue
-            visited.add(page_url)
-            self._checkpoint(task_id)
-            self._update(task_id, status="running", message=f"正在查找新闻文章 · 第 {len(visited)} 页", progress=10)
-            try:
-                listing_html = self._fetch_listing_html(page_url, request)
-            except Exception:
-                # 第一页失败应正常报告错误；推导出的后续页不存在或临时失败时，
-                # 保留此前已经发现的文章，避免整项任务丢失。
-                if articles:
-                    break
-                raise
-            soup = BeautifulSoup(listing_html, "html.parser")
-            previous_count = len(articles)
-            for url in self._article_links(page_url, soup, request.get("article_link_selector", "")):
-                if url not in articles:
-                    articles.append(url)
-                    if len(articles) >= maximum:
-                        break
-            # 推导出的分页若被站点重定向回栏目首页，会得到完全相同的链接；
-            # 此时停止当前分页链，继续处理其他栏目。
-            if len(articles) == previous_count:
-                continue
-            next_page = self._next_news_page(page_url, soup, request.get("next_page_selector", ""))
-            if next_page and next_page not in visited:
-                queue.append(next_page)
-        if not articles:
-            raise RuntimeError("没有在列表页中识别到新闻详情。请确认输入的是公开新闻列表页，或在高级设置中填写新闻链接规则。")
-        return articles[:maximum]
-
-    @staticmethod
-    def _decode_script_url(value):
-        value = str(value or "").replace("\\/", "/")
-        # 不能对整条 URL 使用 html.unescape：`&timestamp` 会被按无分号的
-        # `&times` 实体解码成 `×tamp`，从而破坏微信签名参数。
-        value = re.sub(r"(?i)&amp;", "&", value)
-        value = re.sub(
-            r"&#(?:x[0-9a-fA-F]+|\d+);?",
-            lambda item: html_lib.unescape(item.group(0)), value,
-        )
-        value = value.replace("&quot;", '"').replace("&apos;", "'")
-        value = re.sub(r"\\x([0-9a-fA-F]{2})", lambda item: chr(int(item.group(1), 16)), value)
-        value = re.sub(r"\\u([0-9a-fA-F]{4})", lambda item: chr(int(item.group(1), 16)), value)
-        if value.startswith("//"):
-            value = "https:" + value
-        return value.strip().strip("'\" ;)")
-
+    def _discover_news_urls(self, seeds, request, task_id=None, browser=None):
+        return news.discover(seeds, self._discover_context(request, task_id, browser))
+    # 微信的实现已经搬到 crawler_adapters/wechat.py，这里只留委托，
+    # 既有调用方（预览、任务运行、测试里的 patch）照旧。
     def _resolve_sogou_wechat_url(self, href, request, session=None, referer=""):
-        """在同一搜索会话内执行搜狗中转，并只返回真实微信文章地址。"""
-        public_url = urljoin("https://weixin.sogou.com", href)
-        response = self._request(
-            public_url, request.get("proxies", []), timeout=20, session=session,
-            headers={"Referer": referer or "https://weixin.sogou.com/"},
-        )
-
-        # HTTP 重定向链中的 Location 或最终地址有时已经是微信原文。
-        candidates = [response.url]
-        for item in [*response.history, response]:
-            location = item.headers.get("Location")
-            if location:
-                candidates.append(urljoin(item.url, location))
-
-        content = _decode_response(response)
-        # 常见中转页把 URL 拆成 `url = '...'`、`url += '...'` 多段后再跳转。
-        chunks = [match[1] for match in re.findall(
-            r"(?:var\s+)?url\s*(?:\+)?=\s*(['\"])(.*?)\1", content, re.I | re.S
-        )]
-        if chunks:
-            candidates.append("".join(chunks))
-
-        # 同时兼容直接写入脚本、location 跳转、Meta Refresh 和普通链接的页面。
-        candidates.extend(re.findall(
-            r"https?(?::|%3A)(?:\\?/|%2F){2}mp\.weixin\.qq\.com[^\s'\"<>]+", content, re.I
-        ))
-        candidates.extend(match[1] for match in re.findall(
-            r"(?:location\.(?:replace|assign)|location\.href\s*=)\s*\(?\s*(['\"])(.*?)\1", content, re.I | re.S
-        ))
-        soup = BeautifulSoup(content, "html.parser")
-        refresh = soup.select_one("meta[http-equiv]")
-        if refresh and str(refresh.get("http-equiv", "")).lower() == "refresh":
-            match = re.search(r"url\s*=\s*(.+)$", str(refresh.get("content") or ""), re.I)
-            if match:
-                candidates.append(match.group(1))
-        candidates.extend(node.get("href", "") for node in soup.select("a[href*='mp.weixin.qq.com']"))
-
-        for candidate in candidates:
-            candidate = self._decode_script_url(candidate)
-            candidate = re.sub(r"(?i)%3a", ":", candidate)
-            candidate = re.sub(r"(?i)%2f", "/", candidate)
-            parsed = urlparse(candidate)
-            if parsed.hostname and parsed.hostname.lower() == "mp.weixin.qq.com":
-                return self._clean_url(candidate)
-        return ""
+        return wechat.resolve_sogou_url(href, request, session, referer, ManagerHttpBridge(self))
 
     def _discover_wechat_sogou_urls(self, account_name, request, task_id=None):
-        """按公众号名称检索搜狗微信公开索引，不访问登录态或绕过验证码。"""
-        maximum = int(request.get("max_items") or 50)
-        if maximum < 0: maximum = 10**9
-        articles, seen = [], set()
-        normalized_name = re.sub(r"\s+", "", account_name).lower()
-        session = requests.Session()
-        page_number = 0
-        # 搜狗公开索引有短时频控；最多退避重试两次，不尝试绕过验证码。
-        while len(articles) < maximum:
-            page_number += 1
-            self._checkpoint(task_id)
-            self._update(task_id, status="running", message=f"正在查找“{account_name}”的公开文章 · 第 {page_number} 页", progress=10)
-            search_url = f"https://weixin.sogou.com/weixin?type=2&query={quote_plus(account_name)}&page={page_number}"
-            response = None
-            soup = None
-            items = []
-            attempts = 3 if page_number == 1 else 1
-            for attempt in range(attempts):
-                try:
-                    if attempt:
-                        session.close()
-                        session = requests.Session()
-                        self._update(task_id, message=f"公开索引暂时无结果，正在重试（{attempt + 1}/{attempts}）")
-                        time.sleep(2 + attempt * 3)
-                    response = self._request(
-                        search_url, request.get("proxies", []), timeout=25, session=session,
-                        headers={"Referer": "https://weixin.sogou.com/", "Accept-Language": "zh-CN,zh;q=0.9"},
-                    )
-                    soup = BeautifulSoup(_decode_response(response), "html.parser")
-                    page_text = soup.get_text(" ", strip=True)
-                    captcha = soup.select_one("#seccodeImage, .verify-wrap, .vcode-box, input[name='cpt']")
-                    captcha = captcha or "/antispider/" in response.url
-                    captcha = captcha or "此验证码用于确认这些请求是您的正常行为" in page_text
-                    captcha = captcha or ("请先验证" in page_text and "验证码" in page_text)
-                    if captcha:
-                        break
-                    items = soup.select(".news-box li, ul.news-list li, .news-list li")
-                    if not captcha and (items or page_number > 1):
-                        break
-                except requests.RequestException:
-                    if attempt == attempts - 1:
-                        raise
-            page_text = soup.get_text(" ", strip=True) if soup else ""
-            captcha = soup.select_one("#seccodeImage, .verify-wrap, .vcode-box, input[name='cpt']") if soup else None
-            captcha = captcha or (response is not None and "/antispider/" in response.url)
-            captcha = captcha or "此验证码用于确认这些请求是您的正常行为" in page_text
-            captcha = captcha or ("请先验证" in page_text and "验证码" in page_text)
-            if captcha:
-                raise RuntimeError("公众号公开搜索暂时需要人工验证。请稍后重试，或直接粘贴微信文章链接；系统不会绕过验证码。")
-            if not items:
-                break
-            matched_on_page = 0
-            for item in items:
-                account = _text(item.select_one(".account, .s-p, .account-name, [uigs*='account']"))
-                if account and normalized_name not in re.sub(r"\s+", "", account).lower():
-                    continue
-                link = item.select_one("h3 a[href], .txt-box a[href], a[href*='/link?url=']")
-                if not link:
-                    continue
-                public_url = self._clean_url(urljoin(search_url, link.get("href")))
-                try:
-                    detail_url = self._resolve_sogou_wechat_url(
-                        link.get("href"), request, session=session, referer=search_url
-                    )
-                except Exception:
-                    detail_url = ""
-                unique_url = detail_url or public_url
-                if unique_url and unique_url not in seen:
-                    timestamp_node = item.select_one(".s-p .s2 script")
-                    timestamp_match = re.search(r"timeConvert\(['\"]?(\d+)", timestamp_node.get_text() if timestamp_node else "")
-                    published_at = ""
-                    if timestamp_match:
-                        try:
-                            published_at = datetime.fromtimestamp(int(timestamp_match.group(1)), timezone.utc).isoformat()
-                        except (ValueError, OSError):
-                            pass
-                    prefill = {
-                        "title": _text(item.select_one("h3")) or _text(link), "description": _text(item.select_one(".txt-info")),
-                        "author": account or account_name, "account": account or account_name,
-                        "published_at": published_at, "content": "", "image": "",
-                        # 导出字段只保存真实微信原文；中转页仅供内部去重，避免交付失效链接。
-                        "url": detail_url,
-                    }
-                    if not detail_url:
-                        prefill["collection_note"] = "仅公开索引；详情访问受平台限制"
-                    seen.add(unique_url)
-                    articles.append({"url": detail_url or public_url, "detail_url": detail_url, "prefill": prefill})
-                    matched_on_page += 1
-                    if len(articles) >= maximum:
-                        return articles
-            if matched_on_page == 0 and page_number > 1:
-                break
-            time.sleep(request.get("delay_seconds", 1.0))
-        if not articles:
-            raise RuntimeError(f"没有查找到“{account_name}”发布的公开历史文章。请核对公众号全称；微信没有开放按名称读取完整历史文章的公共接口。")
-        return articles
+        return wechat.sogou_urls(account_name, self._discover_context(request, task_id))
 
     def _discover_wechat_mobile_urls(self, account_name, request, task_id=None):
-        """使用搜狗微信移动端索引；其访问策略与桌面入口相互独立。"""
-        maximum = int(request.get("max_items") or 50)
-        if maximum < 0:
-            maximum = 500
-        normalized_name = re.sub(r"\s+", "", account_name).lower()
-        session = requests.Session()
-        articles, seen = [], set()
-        self._update(task_id, status="running", progress=10,
-                     message="桌面索引需要验证，正在切换移动端公开索引")
-        for page_number in range(1, 6):
-            self._checkpoint(task_id)
-            search_url = (
-                "https://weixin.sogou.com/weixinwap?type=2&query="
-                f"{quote_plus(account_name)}&page={page_number}"
-            )
-            response = self._request(
-                search_url, request.get("proxies", []), timeout=25, session=session,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-                        "AppleWebKit/605.1.15 Mobile/15E148"
-                    ),
-                    "Referer": "https://weixin.sogou.com/",
-                    "Accept-Language": "zh-CN,zh;q=0.9",
-                },
-            )
-            soup = BeautifulSoup(_decode_response(response), "html.parser")
-            page_text = soup.get_text(" ", strip=True)
-            if "/antispider/" in response.url or "此验证码用于确认这些请求是您的正常行为" in page_text:
-                raise RuntimeError("移动端公开索引也触发了访问验证")
-            items = soup.select("li")
-            if not items:
-                break
-            added = 0
-            for item in items:
-                account_node = item.select_one(".s2[data-sourcename], .s2")
-                account = str(account_node.get("data-sourcename") or _text(account_node)) if account_node else ""
-                if re.sub(r"\s+", "", account).lower() != normalized_name:
-                    continue
-                link = item.select_one("h4 a[href^='/link?'], a[data-uigs^='article_title_'][href]")
-                if not link:
-                    continue
-                try:
-                    detail_url = self._resolve_sogou_wechat_url(
-                        link.get("href"), request, session=session, referer=search_url
-                    )
-                except Exception:
-                    detail_url = ""
-                if not detail_url or detail_url in seen:
-                    continue
-                date_node = item.select_one(".s3[data-lastmodified], .s3")
-                published_at = str(date_node.get("data-lastmodified") or _text(date_node)) if date_node else ""
-                articles.append({
-                    "url": detail_url,
-                    "detail_url": detail_url,
-                    "prefill": {
-                        "title": _text(link),
-                        "description": _text(item.select_one("[data-type='article_summary']")),
-                        "author": account,
-                        "account": account,
-                        "published_at": _format_beijing_datetime(published_at),
-                        "content": "",
-                        "image": "",
-                        "url": detail_url,
-                    },
-                })
-                seen.add(detail_url)
-                added += 1
-                if len(articles) >= maximum:
-                    return articles
-            if added == 0 and page_number > 1:
-                break
-            time.sleep(max(0.5, float(request.get("delay_seconds") or 1.0)))
-        if not articles:
-            raise RuntimeError(f"移动端公开索引没有找到“{account_name}”发布的文章")
-        return articles
+        return wechat.mobile_urls(account_name, self._discover_context(request, task_id))
 
-    def _discover_wechat_public_search_urls(self, account_name, request, task_id=None):
-        """通过通用公开索引发现微信原文并逐篇校验公众号。"""
-        maximum = int(request.get("max_items") or 50)
-        if maximum < 0:
-            maximum = 500
-        normalized_name = re.sub(r"\s+", "", account_name).lower()
-        query = quote_plus(f'site:mp.weixin.qq.com/s "{account_name}"')
-        search_url = f"https://html.duckduckgo.com/html/?q={query}"
-        self._update(task_id, status="running", progress=10,
-                     message="主索引需要验证，正在切换备用公开索引")
-        last_error = None
-        response = None
-        for attempt in range(2):
-            try:
-                if attempt:
-                    time.sleep(3)
-                response = self._request(
-                    search_url, request.get("proxies", []), timeout=25,
-                    headers={"Accept-Language": "zh-CN,zh;q=0.9"},
-                )
-                break
-            except requests.RequestException as exc:
-                last_error = exc
-        if response is None:
-            raise RuntimeError(f"备用公开索引连接失败：{last_error}")
+    def _discover_wechat_public_search_urls(self, account_name, request, task_id=None, browser=None):
+        return wechat.public_search_urls(account_name, self._discover_context(request, task_id, browser))
 
-        soup = BeautifulSoup(_decode_response(response), "html.parser")
-        candidates = []
-        for link in soup.select(".result__a[href], a[href]"):
-            href = str(link.get("href") or "").strip()
-            parsed = urlparse(urljoin(search_url, href))
-            candidate = parse_qs(parsed.query).get("uddg", [""])[0]
-            if not candidate and parsed.hostname == "mp.weixin.qq.com":
-                candidate = parsed.geturl()
-            candidate = self._clean_url(candidate)
-            if urlparse(candidate).hostname == "mp.weixin.qq.com" and candidate not in candidates:
-                candidates.append(candidate)
+    def _discover_wechat_urls(self, account_name, request, task_id=None, browser=None):
+        return wechat.discover(account_name, self._discover_context(request, task_id, browser))
 
-        articles = []
-        for candidate in candidates[:30]:
-            self._checkpoint(task_id)
-            try:
-                html = self._fetch_html(candidate, {**request, "dynamic": False})
-            except Exception:
-                continue
-            article = BeautifulSoup(html, "html.parser")
-            account = _text(article.select_one("#js_name, .profile_nickname, .account"))
-            if re.sub(r"\s+", "", account).lower() != normalized_name:
-                continue
-            title = _text(article.select_one("#activity-name, meta[property='og:title'], h1"))
-            published_at = _text(article.select_one("#publish_time, time"))
-            if not published_at:
-                timestamp = re.search(r"(?:var\s+)?ct\s*=\s*['\"](\d{9,13})", html)
-                if timestamp:
-                    published_at = timestamp.group(1)
-            articles.append({
-                "url": candidate,
-                "detail_url": candidate,
-                "prefill": {
-                    "title": title,
-                    "author": account,
-                    "account": account,
-                    "published_at": _format_beijing_datetime(published_at),
-                    "url": candidate,
-                },
-            })
-            if len(articles) >= maximum:
-                break
-        if not articles:
-            raise RuntimeError(f"备用公开索引也没有找到“{account_name}”的可验证原文")
-        return articles
 
-    def _discover_wechat_urls(self, account_name, request, task_id=None):
-        """使用主、备用公开索引发现文章，避免单一搜索入口波动中断采集。"""
-        cache_file = self.data_dir / task_id / "wechat_discovery_cache.json" if task_id else None
-        # 公众号定时任务若每几分钟直接重查公开索引，很容易触发出口 IP 验证。
-        # 近期成功结果可安全复用；真正的索引刷新保持至少 30 分钟间隔。
-        if cache_file and int(request.get("max_items") or 50) == -1:
-            try:
-                cached = json.loads(cache_file.read_text("utf-8"))
-                if time.time() - float(cached.get("fetched_at") or 0) < 1800:
-                    articles = cached.get("articles") or []
-                    if articles:
-                        self._update(task_id, status="running", progress=10,
-                                     message="正在复用近期索引结果，避免频繁访问触发验证")
-                        return articles
-            except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
-                pass
-        try:
-            articles = self._discover_wechat_sogou_urls(account_name, request, task_id)
-        except (RuntimeError, requests.RequestException) as primary_error:
-            try:
-                articles = self._discover_wechat_mobile_urls(account_name, request, task_id)
-            except (RuntimeError, requests.RequestException) as mobile_error:
-                try:
-                    articles = self._discover_wechat_public_search_urls(account_name, request, task_id)
-                except (RuntimeError, requests.RequestException) as fallback_error:
-                    raise RuntimeError(
-                        "公众号公开索引均不可用。"
-                        f"桌面入口：{primary_error}；移动入口：{mobile_error}；"
-                        f"通用备用入口：{fallback_error}"
-                    ) from fallback_error
-        if cache_file and articles:
-            cache_file.parent.mkdir(parents=True, exist_ok=True)
-            temporary = cache_file.with_suffix(".tmp")
-            temporary.write_text(json.dumps({"fetched_at": time.time(), "articles": articles},
-                                            ensure_ascii=False), "utf-8")
-            temporary.replace(cache_file)
-        return articles
+    def _discover_context(self, request, task_id=None, browser=None):
+        """适配器与管理器之间的边界对象。
 
+        data_dir 走 getattr：测试里的 manager 替身只补它关心的属性，
+        不该为了构造这个边界对象被迫凑齐全部字段。
+        """
+        return DiscoverContext(task_id=task_id, request=request, browser=browser,
+                               http=ManagerHttpBridge(self), update=self._update,
+                               data_dir=getattr(self, "data_dir", None),
+                               checkpoint=self._checkpoint, fetch_html=self._fetch_html,
+                               fetch_listing_html=self._fetch_listing_html)
+
+    def _discover_for(self, source, value, request, task_id=None, browser=None):
+        """关键词类数据源的发现入口：全部走适配器协议。"""
+        adapter = get_adapter(source)
+        if adapter.discover is None:
+            raise RuntimeError(f"{source} 没有可用的发现实现")
+        return adapter.discover(value, self._discover_context(request, task_id, browser))
+
+    # YouTube 的实现已经搬到 crawler_adapters/youtube.py，这里只留委托，
+    # 既有调用方（预览、任务运行、测试里的 patch）照旧。
     def _discover_youtube_urls(self, keyword, request, task_id=None):
-        maximum = int(request.get("max_items") or 50)
-        if maximum < 0: maximum = 10**9
-        if task_id:
-            self._update(task_id, status="running", message=f"正在 YouTube 搜索“{keyword}”", progress=10)
-        api_key = os.getenv("YOUTUBE_API_KEY", "").strip()
-        video_ids = []
-        try:
-            if api_key:
-                response = requests.get(
-                    "https://www.googleapis.com/youtube/v3/search",
-                    params={"part": "snippet", "type": "video", "q": keyword,
-                            "maxResults": min(maximum, 50), "key": api_key}, timeout=30,
-                )
-                response.raise_for_status()
-                video_ids = [item.get("id", {}).get("videoId") for item in response.json().get("items", [])]
-            else:
-                search_url = f"https://www.youtube.com/results?search_query={quote_plus(keyword)}&hl=zh-CN"
-                html = _decode_response(self._request(search_url, request.get("proxies", []), timeout=30))
-                video_ids = re.findall(r'"videoId"\s*:\s*"([\w-]{11})"', html)
-        except requests.RequestException as exc:
-            raise RuntimeError("YouTube 搜索暂时无法连接，请检查网络或代理配置后重试") from exc
-        video_ids = list(dict.fromkeys(item for item in video_ids if item))[:maximum]
-        if not video_ids:
-            raise RuntimeError("YouTube 没有返回公开视频结果。可稍后重试，或由管理员配置 YOUTUBE_API_KEY。")
-        return [f"https://www.youtube.com/watch?v={video_id}" for video_id in video_ids]
-
-    @staticmethod
-    def _youtube_account_url(value):
-        text = str(value or '').strip()
-        match = re.search(r'https?://(?:www\.)?youtube\.com/(?:@[^/?#]+|channel/[^/?#]+|c/[^/?#]+|user/[^/?#]+)', text, re.I)
-        if match:
-            return match.group(0).rstrip('/')
-        if re.fullmatch(r'@[A-Za-z0-9._-]{3,}', text):
-            return 'https://www.youtube.com/' + text
-        return ''
-
-    def _youtube_extract(self, url, request, flat=False, comments=False):
-        try:
-            import yt_dlp
-        except ImportError as exc:
-            raise RuntimeError('YouTube 采集组件未安装，请先安装 yt-dlp') from exc
-        maximum = int(request.get('max_items') or 50)
-        maximum = 500 if maximum < 0 else min(500, max(1, maximum))
-        options = {'quiet': True, 'no_warnings': True, 'skip_download': True, 'socket_timeout': 30,
-                   'retries': 3, 'playlistend': maximum,
-                   'extract_flat': 'in_playlist' if flat else False}
-        if comments:
-            options.update(getcomments=True, max_comments={'all': [int(request.get('max_items') or 50)]})
-        proxies = request.get('proxies') or []
-        if proxies:
-            proxy = str(proxies[0]).strip()
-            options['proxy'] = proxy if '://' in proxy else 'http://' + proxy
-        try:
-            with yt_dlp.YoutubeDL(options) as downloader:
-                return downloader.extract_info(url, download=False) or {}
-        except Exception as exc:
-            raise RuntimeError(f'YouTube 暂时无法访问：{str(exc).splitlines()[-1][:240]}') from exc
-
-    @staticmethod
-    def _youtube_video_row(info):
-        return CrawlerTaskManager._fill_youtube_row({key: '' for key in BUILTIN_FIELDS['youtube']}, info or {})
+        return youtube.search_urls(keyword, self._discover_context(request, task_id))
 
     def _discover_youtube_data(self, value, request, task_id=None):
-        mode = str(request.get('youtube_mode') or 'keyword').lower()
-        maximum = int(request.get('max_items') or 50)
-        maximum = 500 if maximum < 0 else min(500, max(1, maximum))
-        if mode == 'keyword':
-            return self._discover_youtube_urls(value, request, task_id)
-        if mode == 'comments':
-            video_url = str(value or '').strip()
-            if not re.match(r'https?://(?:www\.)?(?:youtube\.com/watch\?[^\s]*v=|youtu\.be/)', video_url, re.I):
-                raise ValueError('请输入完整的 YouTube 视频链接')
-            info = self._youtube_extract(video_url, request, comments=True)
-            rows = []
-            for index, item in enumerate(info.get('comments') or [], 1):
-                author = str(item.get('author') or item.get('author_id') or '')
-                text = str(item.get('text') or '').strip()
-                if not text: continue
-                cid = str(item.get('id') or index)
-                rows.append({'author': author, 'username': item.get('author_id') or '', 'text': text,
-                             'published_at': item.get('timestamp') or item.get('time_text') or '',
-                             'likes': item.get('like_count', ''), 'replies': item.get('reply_count', ''),
-                             'url': f'{video_url}#comment-{cid}'})
-                if len(rows) >= maximum: break
-            if not rows: raise RuntimeError('YouTube 未返回可公开读取的评论')
-            return [{'url': row['url'], 'detail_url': '', 'prefill': row} for row in rows]
-        account_url = self._youtube_account_url(value)
-        if not account_url: raise ValueError('请输入 YouTube 账号，例如 @YouTube 或频道链接')
-        extract_url = account_url.rstrip('/') + '/videos' if mode == 'videos' and not account_url.rstrip('/').endswith('/videos') else account_url
-        info = self._youtube_extract(extract_url, request, flat=(mode == 'videos'))
-        if mode == 'user':
-            row = {'username': info.get('channel_id') or info.get('uploader_id') or account_url.rsplit('/', 1)[-1],
-                   'display_name': info.get('channel') or info.get('uploader') or info.get('title') or '',
-                   'bio': info.get('description') or '', 'followers': info.get('channel_follower_count', ''),
-                   'videos': info.get('playlist_count') or info.get('channel_video_count', ''),
-                   'verified': info.get('channel_is_verified', ''), 'avatar': info.get('channel_thumbnail') or info.get('thumbnail') or '', 'url': account_url}
-            return [{'url': account_url, 'detail_url': '', 'prefill': row}]
-        targets = []
-        for entry in info.get('entries') or []:
-            if not entry: continue
-            url = str(entry.get('webpage_url') or entry.get('url') or '')
-            if not url.startswith('http') and entry.get('id'): url = f'https://www.youtube.com/watch?v={entry["id"]}'
-            if not url: continue
-            row = self._youtube_video_row(entry); row['url'] = url
-            targets.append({'url': url, 'detail_url': '', 'prefill': row})
-            if len(targets) >= maximum: break
-        if not targets: raise RuntimeError('YouTube 未返回该账号的公开视频')
-        return targets
+        return youtube.discover(value, self._discover_context(request, task_id))
 
-    @staticmethod
-    def _twitter_username(value):
-        text = str(value or "").strip()
-        match = re.search(r"(?:https?://(?:www\.)?(?:x|twitter)\.com/|(?:^|\s)(?:from:|@))([A-Za-z0-9_]{1,15})", text, re.I)
-        if not match and re.fullmatch(r"[A-Za-z0-9_]{1,15}", text):
-            match = re.match(r"([A-Za-z0-9_]{1,15})", text)
-        return match.group(1) if match else ""
-
-    @staticmethod
-    def _walk_json(value):
-        if isinstance(value, dict):
-            yield value
-            for child in value.values():
-                yield from CrawlerTaskManager._walk_json(child)
-        elif isinstance(value, list):
-            for child in value:
-                yield from CrawlerTaskManager._walk_json(child)
-
-    def _twitter_profile_document(self, username, request):
-        response = self._request(
-            f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{username}?lang=zh-cn",
-            request.get("proxies", []), timeout=18,
-            headers={"Referer": "https://platform.twitter.com/"},
-        )
-        html = _decode_response(response)
-        soup = BeautifulSoup(html, "html.parser")
-        node = soup.select_one("#__NEXT_DATA__")
-        data = {}
-        if node:
-            try:
-                data = json.loads(node.get_text())
-            except json.JSONDecodeError:
-                pass
-        return html, soup, data
-
-    def _discover_twitter_user(self, account, request, task_id=None):
-        accounts = [item.strip() for item in re.split(r"[\n,，;；]+", str(account or "")) if item.strip()]
-        if len(accounts) > 1:
-            rows = []
-            for item in accounts[:500]:
-                rows.extend(self._discover_twitter_user(item, request, task_id))
-            return rows
-        username = self._twitter_username(account)
-        if not username:
-            raise ValueError("请输入有效的 X 用户名，例如 @OpenAI")
-        if task_id:
-            self._update(task_id, status="running", message=f"正在读取 @{username} 的公开用户信息", progress=10)
-        html, soup, data = self._twitter_profile_document(username, request)
-        normalized = username.lower()
-        users = []
-        for item in self._walk_json(data):
-            handle = str(item.get("screen_name") or item.get("username") or "").lstrip("@").lower()
-            if handle == normalized:
-                users.append(item)
-        user = max(users, key=lambda item: sum(key in item for key in (
-            "name", "description", "followers_count", "friends_count", "statuses_count",
-            "profile_image_url_https", "created_at", "verified",
-        )), default={})
-        title_node = soup.select_one("meta[property='og:title']")
-        page_title = str(title_node.get("content") or "") if title_node else _text(soup.title)
-        page_description = ""
-        description_node = soup.select_one("meta[property='og:description'], meta[name='description']")
-        if description_node:
-            page_description = str(description_node.get("content") or "")
-        avatar_node = soup.select_one("meta[property='og:image']")
-        avatar = str(avatar_node.get("content") or "") if avatar_node else ""
-        display_name = str(user.get("name") or "").strip()
-        if not display_name and page_title:
-            display_name = re.sub(r"\s*\(@[^)]+\).*", "", page_title).strip()
-        row = {
-            "username": username,
-            "display_name": display_name or username,
-            "bio": str(user.get("description") or page_description).strip(),
-            "location": str(user.get("location") or "").strip(),
-            "followers": user.get("followers_count", ""),
-            "following": user.get("friends_count", ""),
-            "posts": user.get("statuses_count", ""),
-            "joined_at": user.get("created_at", ""),
-            "verified": user.get("verified", ""),
-            "avatar": user.get("profile_image_url_https") or user.get("profile_image_url") or avatar,
-            "url": f"https://x.com/{username}",
-        }
-        if not user and not page_title and username.lower() not in html.lower():
-            raise RuntimeError(f"没有读取到 @{username} 的公开用户信息")
-        return [{"url": row["url"], "detail_url": "", "prefill": row}]
-
+    # X / Twitter 的实现已经搬到 crawler_adapters/twitter.py，这里只留委托。
     def _discover_twitter_posts(self, keyword, request, task_id=None):
-        """无需 API Token，从公开索引发现推文并通过 X oEmbed 读取内容。"""
-        mode = str(request.get("twitter_mode") or "keyword").lower()
-        if mode == "user":
-            return self._discover_twitter_user(keyword, request, task_id)
-        if mode == "history":
-            username = self._twitter_username(keyword)
-            if not username:
-                raise ValueError("请输入有效的 X 用户名，例如 @OpenAI")
-            keyword = f"@{username}"
-        requested = int(request.get("max_items") or 50)
-        maximum = 500 if requested < 0 else min(500, max(1, requested))
-        if task_id:
-            self._update(task_id, status="running", message=f"正在公开索引中查找“{keyword}”", progress=10)
+        return twitter.posts(keyword, self._discover_context(request, task_id))
 
-        status_pattern = re.compile(
-            r"https?://(?:www\.)?(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})/status/(\d+)", re.I
-        )
-        candidates = []
-
-        def add_candidates(value):
-            value = html_lib.unescape(str(value or "")).replace("\\/", "/")
-            for username, status_id in status_pattern.findall(value):
-                url = f"https://x.com/{username}/status/{status_id}"
-                if url not in candidates:
-                    candidates.append(url)
-
-        add_candidates(keyword)
-        direct_input = bool(candidates)
-        account_match = re.search(r"(?:^|\s)(?:from:|@)([A-Za-z0-9_]{1,15})(?:\s|$)", keyword, re.I)
-        bare_account = mode == "history" and not account_match and bool(re.fullmatch(r"[A-Za-z0-9_]{1,15}", keyword.strip()))
-        if bare_account:
-            account_match = re.match(r"([A-Za-z0-9_]{1,15})", keyword.strip())
-        if account_match:
-            username = account_match.group(1)
-            try:
-                profile = self._request(
-                    f"https://syndication.twitter.com/srv/timeline-profile/screen-name/{username}?lang=zh-cn",
-                    request.get("proxies", []), timeout=18,
-                    headers={"Referer": "https://platform.twitter.com/"},
-                )
-                profile_html = _decode_response(profile)
-                # 公开时间线内部同时使用绝对链接和 /账号/status/id 相对路径。
-                add_candidates(profile_html)
-                for status_id in re.findall(rf"/{re.escape(username)}/status/(\d+)", profile_html, re.I):
-                    add_candidates(f"https://x.com/{username}/status/{status_id}")
-            except requests.RequestException:
-                pass
-
-        if not direct_input and len(candidates) < maximum:
-            query = quote_plus(f"site:x.com status {keyword}")
-            search_urls = [
-                f"https://html.duckduckgo.com/html/?q={query}",
-                f"https://www.google.com/search?q={query}&num=50&hl=zh-CN",
-            ]
-            for search_url in search_urls:
-                try:
-                    response = self._request(
-                        search_url, request.get("proxies", []), timeout=18,
-                        headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7"},
-                    )
-                except requests.RequestException:
-                    continue
-                page = BeautifulSoup(_decode_response(response), "html.parser")
-                for link in page.select("a[href]"):
-                    href = urljoin(search_url, str(link.get("href") or ""))
-                    parsed = urlparse(href)
-                    href = parse_qs(parsed.query).get("uddg", [href])[0]
-                    if href.startswith("/url?"):
-                        href = parse_qs(urlparse(href).query).get("q", [href])[0]
-                    add_candidates(href)
-                add_candidates(str(page))
-                if len(candidates) >= maximum:
-                    break
-
-        targets = []
-        for post_url in candidates[:maximum]:
-            self._checkpoint(task_id)
-            payload = None
-            embed_url = post_url.replace("https://x.com/", "https://twitter.com/")
-            for endpoint in ("https://publish.twitter.com/oembed", "https://publish.x.com/oembed"):
-                try:
-                    response = self._request(
-                        endpoint + "?" + urlencode({
-                            "url": embed_url, "omit_script": "true", "dnt": "true", "lang": "zh-cn",
-                        }),
-                        request.get("proxies", []), timeout=15,
-                        headers={"Referer": "https://platform.twitter.com/"},
-                    )
-                    response.raise_for_status()
-                    payload = response.json()
-                    if payload.get("html"):
-                        break
-                except (requests.RequestException, ValueError):
-                    continue
-            if not payload:
-                continue
-            embed = BeautifulSoup(str(payload.get("html") or ""), "html.parser")
-            text_node = embed.select_one("blockquote p")
-            date_link = embed.select("blockquote a[href]")
-            text = _text(text_node)
-            if not text:
-                continue
-            published_at = _text(date_link[-1]) if date_link else ""
-            author = str(payload.get("author_name") or "").strip()
-            username_match = status_pattern.search(post_url)
-            username = username_match.group(1) if username_match else ""
-            # 账号时间线可附带关键词，按正文做本地筛选；from:/@账号部分不参与匹配。
-            filter_text = "" if bare_account else re.sub(
-                r"(?:^|\s)(?:from:|@)[A-Za-z0-9_]{1,15}(?:\s|$)", " ", keyword
-            ).strip()
-            if account_match and filter_text and filter_text.lower() not in text.lower():
-                continue
-            targets.append({"url": post_url, "detail_url": "", "prefill": {
-                "text": text, "author": author or username,
-                "published_at": published_at, "likes": "", "reposts": "", "replies": "",
-                "media": "", "url": str(payload.get("url") or post_url).replace("twitter.com/", "x.com/"),
-            }})
-            if len(targets) >= maximum:
-                break
-        if not targets:
-            raise RuntimeError(
-                f"公开网页索引暂未找到与“{keyword}”相关且可嵌入的推文。"
-                "可尝试输入 @账号、from:账号 关键词，或稍后重试。"
-            )
-        return targets
-
+    # TikTok / 抖音的实现已经搬到 crawler_adapters/tiktok.py 与 douyin.py，这里只留委托，
+    # 既有调用方（预览、任务运行、测试里的 patch）照旧。
     @staticmethod
     def _tiktok_username(value):
-        text = html_lib.unescape(str(value or "")).strip()
-        # 抖音账号昵称可能包含中文；允许 @ 后的 Unicode 字符，过滤空白和 URL 分隔符。
-        match = re.search(r"(?:https?://(?:www\.)?(?:tiktok\.com|douyin\.com)/)?@([^\s/@?#]{2,40})", text, re.I)
-        if not match and re.fullmatch(r"[^\s/@?#]{2,40}", text):
-            match = re.match(r"([^\s/@?#]{2,40})", text)
-        return match.group(1) if match else ""
+        return tiktok.username(value)
 
     @staticmethod
     def _tiktok_video_url(value):
-        match = re.search(
-            r"https?://(?:www\.)?(?:tiktok\.com/@[A-Za-z0-9._]+/video/\d+|douyin\.com/video/\d+|v\.douyin\.com/[A-Za-z0-9_-]+)",
-            html_lib.unescape(str(value or "")), re.I,
-        )
-        return match.group(0).split("?", 1)[0] if match else ""
+        return tiktok.video_url(value)
 
     @staticmethod
     def _tiktok_video_row(info):
-        info = info or {}
-        webpage_url = str(info.get("webpage_url") or info.get("original_url") or info.get("url") or "")
-        if not webpage_url.startswith("http") and info.get("id") and info.get("uploader_id"):
-            webpage_url = f"https://www.tiktok.com/@{info['uploader_id']}/video/{info['id']}"
-        return {
-            "title": info.get("title") or info.get("fulltitle") or "",
-            "description": info.get("description") or "",
-            "author": info.get("uploader") or info.get("creator") or "",
-            "username": info.get("uploader_id") or info.get("channel_id") or "",
-            "published_at": info.get("timestamp") or info.get("upload_date") or "",
-            "duration": info.get("duration_string") or info.get("duration") or "",
-            "views": info.get("view_count", ""),
-            "likes": info.get("like_count", ""),
-            "comments": info.get("comment_count", ""),
-            "shares": info.get("repost_count", info.get("share_count", "")),
-            "thumbnail": info.get("thumbnail") or "",
-            "url": webpage_url,
-        }
+        return tiktok.video_row(info)
 
-    def _tiktok_extract(self, url, request, flat=False):
-        try:
-            import yt_dlp
-        except ImportError as exc:
-            raise RuntimeError("TikTok 采集组件未安装，请先安装 yt-dlp") from exc
-        requested = int(request.get("max_items") or 50)
-        maximum = 500 if requested < 0 else min(500, max(1, requested))
-        options = {
-            "quiet": True, "no_warnings": True, "skip_download": True,
-            "socket_timeout": 30, "retries": 3, "playlistend": maximum,
-            "extract_flat": "in_playlist" if flat else False,
-        }
-        # yt-dlp handles both TikTok and Douyin URLs; keep the extractor
-        # generic so shared task/export logic remains unchanged.
-        proxies = request.get("proxies") or []
-        if proxies:
-            proxy = str(proxies[0]).strip()
-            options["proxy"] = proxy if "://" in proxy else "http://" + proxy
-        try:
-            with yt_dlp.YoutubeDL(options) as downloader:
-                return downloader.extract_info(url, download=False) or {}
-        except Exception as exc:
-            message = str(exc).splitlines()[-1]
-            if re.search(r"login|captcha|verify|sign in", message, re.I):
-                raise RuntimeError("TikTok 要求登录或访问验证，无法读取该公开内容") from exc
-            raise RuntimeError(f"TikTok 暂时无法访问：{message[:240]}。请检查网络或代理配置") from exc
-
-    @classmethod
-    def _tiktok_user_from_html(cls, username, html):
-        soup = BeautifulSoup(html or "", "html.parser")
-        documents = []
-        for node in soup.select("script#__UNIVERSAL_DATA_FOR_REHYDRATION__, script#SIGI_STATE, script[type='application/json']"):
-            try:
-                documents.append(json.loads(node.string or node.get_text() or "{}"))
-            except (TypeError, json.JSONDecodeError):
-                continue
-        normalized = username.lower()
-        candidates = []
-        for document in documents:
-            for item in cls._walk_json(document):
-                handle = str(item.get("uniqueId") or item.get("unique_id") or item.get("username") or "").lstrip("@").lower()
-                if handle == normalized:
-                    candidates.append(item)
-                nested_user = item.get("user") if isinstance(item.get("user"), dict) else None
-                nested_stats = item.get("stats") if isinstance(item.get("stats"), dict) else None
-                if nested_user:
-                    nested_handle = str(nested_user.get("uniqueId") or nested_user.get("username") or "").lstrip("@").lower()
-                    if nested_handle == normalized:
-                        candidates.append({**nested_user, **(nested_stats or {})})
-        user = max(candidates, key=lambda item: sum(key in item for key in (
-            "nickname", "signature", "followerCount", "followingCount", "videoCount", "heartCount",
-        )), default={})
-        stats = next((item for item in candidates if any(key in item for key in (
-            "followerCount", "followingCount", "videoCount", "heartCount",
-        ))), {})
-        row = {
-            "username": user.get("uniqueId") or user.get("unique_id") or username,
-            "display_name": user.get("nickname") or username,
-            "bio": user.get("signature") or "",
-            "followers": stats.get("followerCount", user.get("followerCount", "")),
-            "following": stats.get("followingCount", user.get("followingCount", "")),
-            "videos": stats.get("videoCount", user.get("videoCount", "")),
-            "likes": stats.get("heartCount", stats.get("heart", user.get("heartCount", ""))),
-            "verified": user.get("verified", ""),
-            "avatar": user.get("avatarLarger") or user.get("avatarMedium") or user.get("avatarThumb") or "",
-            "url": f"https://www.tiktok.com/@{username}",
-        }
-        return row if candidates else None
-
-    def _discover_tiktok_user(self, account, request, task_id=None):
-        accounts = [item.strip() for item in re.split(r"[\n,，;；]+", str(account or "")) if item.strip()]
-        if len(accounts) > 1:
-            rows = []
-            for item in accounts[:500]:
-                rows.extend(self._discover_tiktok_user(item, request, task_id))
-            return rows
-        username = self._tiktok_username(account)
-        if not username:
-            raise ValueError("请输入有效的 TikTok 账号，例如 @tiktok")
-        if task_id:
-            self._update(task_id, status="running", message=f"正在读取 @{username} 的公开账号信息", progress=10)
-        platform = str(request.get("source") or "tiktok").lower()
-        profile_url = (f"https://www.douyin.com/user/{username}"
-                       if platform == "douyin" else f"https://www.tiktok.com/@{username}")
-        try:
-            html = self._fetch_html(profile_url, {**request, "dynamic": True, "preview_mode": True})
-            row = self._tiktok_user_from_html(username, html)
-        except Exception:
-            row = None
-        if not row:
-            info = self._tiktok_extract(profile_url, request, flat=True)
-            entry = next((item for item in (info.get("entries") or []) if item), {})
-            row = {
-                "username": entry.get("uploader_id") or username,
-                "display_name": entry.get("uploader") or info.get("uploader") or username,
-                "bio": info.get("description") or "", "followers": "", "following": "",
-                "videos": info.get("playlist_count") or "", "likes": "", "verified": "",
-                "avatar": info.get("thumbnail") or entry.get("thumbnail") or "", "url": profile_url,
-            }
-        return [{"url": profile_url, "detail_url": "", "prefill": row}]
-
-    def _discover_tiktok_account_videos(self, account, request, task_id=None):
-        accounts = [item.strip() for item in re.split(r"[\n,，;；]+", str(account or "")) if item.strip()]
-        if len(accounts) > 1:
-            targets, seen = [], set()
-            for item in accounts[:500]:
-                for target in self._discover_tiktok_account_videos(item, request, task_id):
-                    url = target.get("url", "") if isinstance(target, dict) else str(target)
-                    if url and url not in seen:
-                        seen.add(url)
-                        targets.append(target)
-            return targets
-        username = self._tiktok_username(account)
-        if not username:
-            raise ValueError("请输入有效的 TikTok 账号，例如 @tiktok")
-        if task_id:
-            self._update(task_id, status="running", message=f"正在查找 @{username} 的公开视频", progress=10)
-        platform = str(request.get("source") or "tiktok").lower()
-        profile_url = (f"https://www.douyin.com/user/{username}"
-                       if platform == "douyin" else f"https://www.tiktok.com/@{username}")
-        info = self._tiktok_extract(profile_url, request, flat=True)
-        targets = []
-        for entry in info.get("entries") or []:
-            if not entry:
-                continue
-            row = self._tiktok_video_row(entry)
-            url = row["url"] or self._tiktok_video_url(entry.get("url"))
-            if not url and entry.get("id"):
-                url = (f"https://www.douyin.com/video/{entry['id']}"
-                       if platform == "douyin" else f"https://www.tiktok.com/@{username}/video/{entry['id']}")
-            if url:
-                row["url"] = url
-                targets.append({"url": url, "detail_url": "", "prefill": row})
-        if not targets:
-            raise RuntimeError(f"没有读取到 @{username} 的公开视频，请检查账号或代理配置")
-        return targets
-
-    def _tiktok_oembed_row(self, url, request):
-        """使用 TikTok 官方公开 oEmbed 补全搜索结果，不依赖登录态。"""
-        response = self._request(
-            "https://www.tiktok.com/oembed?" + urlencode({"url": url}),
-            request.get("proxies", []), timeout=18,
-            headers={"Accept": "application/json"},
-        )
-        payload = response.json()
-        author_url = str(payload.get("author_url") or "")
-        username = self._tiktok_username(author_url)
-        return {
-            "title": payload.get("title") or "",
-            "description": payload.get("title") or "",
-            "author": payload.get("author_name") or username,
-            "username": username,
-            "published_at": "", "duration": "", "views": "", "likes": "",
-            "comments": "", "shares": "",
-            "thumbnail": payload.get("thumbnail_url") or "",
-            "url": url,
-        }
-
-    def _discover_tiktok_index_urls(self, keyword, request, maximum):
-        """TikTok 站内搜索不可用时，从公开网页索引发现视频链接。"""
-        # 不同搜索引擎对 `site:`/`inurl:` 组合的处理并不一致；先用
-        # 精确查询，再用宽查询兜底，避免因为搜索语法被忽略而得到空结果。
-        queries = [
-            f"site:tiktok.com/@ inurl:/video/ {keyword}",
-            f"site:tiktok.com {keyword} video",
-            f"TikTok {keyword}",
-        ]
-        endpoints = []
-        for query_text in queries:
-            query = quote_plus(query_text)
-            endpoints.extend([
-                f"https://html.duckduckgo.com/html/?q={query}",
-                f"https://www.google.com/search?q={query}&num=50&hl=zh-CN",
-                f"https://www.bing.com/search?q={query}&count=50",
-            ])
-        # 搜索引擎经常返回相对链接、转义斜杠或不带协议的 TikTok 链接。
-        # 统一在这里恢复为可访问的公开视频地址，避免因链接表现形式变化而误判为空。
-        pattern = re.compile(
-            r"(?:(?:https?:)?//)?(?:www\.|m\.)?tiktok\.com/@[A-Za-z0-9._]+/video/\d+",
-            re.I,
-        )
-        urls = []
-
-        def add(value):
-            text = unquote(html_lib.unescape(str(value or ""))).replace("\\u002F", "/").replace("\\/", "/")
-            for found in pattern.findall(text):
-                clean = found.split("?", 1)[0]
-                if clean.startswith("//"):
-                    clean = "https:" + clean
-                elif not clean.startswith("http"):
-                    clean = "https://" + clean
-                clean = clean.replace("https://m.tiktok.com/", "https://www.tiktok.com/")
-                if clean not in urls:
-                    urls.append(clean)
-
-        for endpoint in endpoints:
-            if len(urls) >= maximum:
-                break
-            try:
-                response = self._request(
-                    endpoint, request.get("proxies", []), timeout=18,
-                    headers={"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7"},
-                )
-            except requests.RequestException:
-                continue
-            page_html = _decode_response(response)
-            add(page_html)
-            soup = BeautifulSoup(page_html, "html.parser")
-            for anchor in soup.select("a[href]"):
-                href = str(anchor.get("href") or "")
-                parsed = urlparse(href)
-                for key in ("uddg", "q", "url", "u"):
-                    value = parse_qs(parsed.query).get(key, [])
-                    if value:
-                        add(value[0])
-                add(href)
-        return urls[:maximum]
-
-    def _discover_tiktok_browser_urls(self, keyword, request, maximum):
-        """从浏览器 DOM 和站内公开搜索响应中同时发现视频。"""
-        try:
-            from playwright.sync_api import sync_playwright
-        except ImportError:
-            return []
-        urls = []
-
-        def add(url):
-            clean = self._tiktok_video_url(url)
-            if clean and clean not in urls:
-                urls.append(clean)
-
-        def add_payload(payload):
-            for item in self._walk_json(payload):
-                video_id = str(item.get("id") or item.get("aweme_id") or "")
-                author = item.get("author") if isinstance(item.get("author"), dict) else {}
-                username = str(author.get("uniqueId") or author.get("unique_id") or "")
-                if video_id.isdigit() and username:
-                    add(f"https://www.tiktok.com/@{username}/video/{video_id}")
-
-        with sync_playwright() as playwright:
-            launch = {"headless": True}
-            proxies = request.get("proxies") or []
-            if proxies:
-                proxy = str(proxies[0]).strip()
-                launch["proxy"] = {"server": proxy if "://" in proxy else "http://" + proxy}
-            browser = playwright.chromium.launch(**launch)
-            try:
-                context = browser.new_context(
-                    user_agent=("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"),
-                    locale="zh-CN", viewport={"width": 1440, "height": 1000},
-                )
-                page = context.new_page()
-
-                def handle_response(response):
-                    if "search" not in response.url.lower():
-                        return
-                    try:
-                        if "json" in str(response.headers.get("content-type") or "").lower():
-                            add_payload(response.json())
-                    except Exception:
-                        pass
-
-                page.on("response", handle_response)
-                page.goto(
-                    f"https://www.tiktok.com/search?q={quote_plus(keyword)}",
-                    wait_until="domcontentloaded", timeout=45000,
-                )
-                for _ in range(8):
-                    page.wait_for_timeout(1000)
-                    for href in page.locator('a[href*="/video/"]').evaluate_all(
-                            "nodes => nodes.map(node => node.href)"):
-                        add(href)
-                    if len(urls) >= maximum:
-                        break
-                    page.mouse.wheel(0, 850)
-                return urls[:maximum]
-            finally:
-                browser.close()
-
-    def _discover_tiktok_keyword_videos(self, keyword, request, task_id=None):
-        keyword = str(keyword or "").strip()
-        direct = self._tiktok_video_url(keyword)
-        if direct:
-            try:
-                row = self._tiktok_video_row(self._tiktok_extract(direct, request))
-            except RuntimeError:
-                row = self._tiktok_oembed_row(direct, request)
-            row["url"] = row["url"] or direct
-            return [{"url": direct, "detail_url": "", "prefill": row}]
-        if not keyword:
-            raise ValueError("请输入 TikTok 搜索关键词")
-        if task_id:
-            self._update(task_id, status="running", message=f"正在搜索 TikTok 关键词“{keyword}”", progress=10)
-        requested = int(request.get("max_items") or 50)
-        maximum = 500 if requested < 0 else min(500, max(1, requested))
-        search_urls = [
-            f"https://www.tiktok.com/search?q={quote_plus(keyword)}",
-            f"https://www.tiktok.com/search?lang=en&q={quote_plus(keyword)}",
-        ]
-        html = ""
-        for search_url in search_urls:
-            try:
-                html = self._fetch_html(search_url, {**request, "dynamic": True, "preview_mode": True})
-            except Exception:
-                html = ""
-            html = html_lib.unescape(html).replace("\\u002F", "/").replace("\\/", "/")
-            if re.search(r"(?:tiktok\.com|/video/)" , html, re.I):
-                break
-        pattern = re.compile(r"(?:https?://(?:www\.)?tiktok\.com)?(/@[A-Za-z0-9._]+/video/\d+)", re.I)
-        urls = list(dict.fromkeys("https://www.tiktok.com" + path for path in pattern.findall(html)))
-        if len(urls) < maximum:
-            try:
-                for url in self._discover_tiktok_browser_urls(keyword, request, maximum):
-                    if url not in urls:
-                        urls.append(url)
-                    if len(urls) >= maximum:
-                        break
-            except Exception:
-                pass
-        if len(urls) < maximum:
-            for url in self._discover_tiktok_index_urls(keyword, request, maximum):
-                if url not in urls:
-                    urls.append(url)
-                if len(urls) >= maximum:
-                    break
-        targets = []
-        for url in urls[:maximum]:
-            self._checkpoint(task_id)
-            try:
-                row = self._tiktok_video_row(self._tiktok_extract(url, request))
-            except RuntimeError:
-                try:
-                    row = self._tiktok_oembed_row(url, request)
-                except (requests.RequestException, ValueError):
-                    row = {"url": url}
-            row["url"] = row.get("url") or url
-            targets.append({"url": url, "detail_url": "", "prefill": row})
-        if not targets:
-            raise RuntimeError(
-                "TikTok 当前未返回可公开访问的视频结果（站内搜索可能需要登录或受地区限制）。"
-                "请粘贴一个 TikTok 视频链接，或在高级设置中配置可用代理后重试。"
-            )
-        return targets
+    @staticmethod
+    def _tiktok_user_from_html(username, html):
+        return tiktok.user_from_html(username, html)
 
     @staticmethod
     def _tiktok_comment_rows(items, video_url):
-        rows, seen = [], set()
-        for index, item in enumerate(items or [], 1):
-            text = re.sub(r"\s+", " ", str(item.get("text") or "")).strip()
-            username = str(item.get("username") or "").lstrip("@").strip()
-            key = str(item.get("id") or f"{username}|{text}")
-            if not text or key in seen:
-                continue
-            seen.add(key)
-            rows.append({
-                "author": item.get("author") or username, "username": username, "text": text,
-                "published_at": item.get("published_at") or "", "likes": item.get("likes") or "",
-                "replies": item.get("replies") or "", "url": f"{video_url}#comment-{item.get('id') or index}",
-            })
-        return rows
+        return tiktok.comment_rows(items, video_url)
 
-    def _discover_tiktok_comments(self, value, request, task_id=None):
-        video_url = self._tiktok_video_url(value)
-        if not video_url:
-            raise ValueError("请输入完整的 TikTok 视频链接")
-        if task_id:
-            self._update(task_id, status="running", message="正在加载公开视频评论", progress=10)
-        requested = int(request.get("max_items") or 50)
-        maximum = 500 if requested < 0 else min(500, max(1, requested))
-        # 先尝试 TikTok 公开评论接口（页面 DOM 不稳定时仍可获取评论）。
-        video_id = video_url.rstrip("/").split("/")[-1].split("?")[0]
-        try:
-            api = f"https://www.tiktok.com/api/comment/list/?aid=1988&aweme_id={video_id}&count={min(maximum,100)}&cursor=0"
-            response = self._request(api, request.get("proxies", []), timeout=20,
-                                     headers={"Referer": video_url, "User-Agent": "Mozilla/5.0"})
-            payload = response.json()
-            comments = payload.get("comments") or payload.get("data", {}).get("comments") or []
-            if comments:
-                items = [{"id": item.get("cid"), "text": item.get("text") or item.get("share_info", {}).get("desc"),
-                          "username": (item.get("user") or {}).get("unique_id") or (item.get("user") or {}).get("nickname"),
-                          "author": (item.get("user") or {}).get("nickname"), "likes": item.get("digg_count"),
-                          "published_at": item.get("create_time")} for item in comments]
-                rows = self._tiktok_comment_rows(items, video_url)[:maximum]
-                if rows:
-                    return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
-        except Exception:
-            pass
-        try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as playwright:
-                launch = {"headless": True}
-                proxies = request.get("proxies") or []
-                if proxies:
-                    proxy = str(proxies[0]).strip()
-                    launch["proxy"] = {"server": proxy if "://" in proxy else "http://" + proxy}
-                browser = playwright.chromium.launch(**launch)
-                try:
-                    page = browser.new_page(viewport={"width": 1440, "height": 1000}, locale="zh-CN")
-                    page.goto(video_url, wait_until="domcontentloaded", timeout=45000)
-                    page.wait_for_timeout(2200)
-                    items = []
-                    stable = 0
-                    while len(items) < maximum and stable < 3:
-                        current = page.locator('[data-e2e="comment-level-1"], [data-e2e="comment-item"], div[class*="DivCommentItemContainer"], div[class*="CommentItem"]').evaluate_all("""nodes => nodes.map((node, index) => ({
-                          id: node.getAttribute('data-comment-id') || node.id || '',
-                          username: (node.querySelector('[data-e2e="comment-username-1"], a[href^="/@"]')?.textContent || '').trim(),
-                          author: (node.querySelector('[data-e2e="comment-username-1"], a[href^="/@"]')?.textContent || '').trim(),
-                          text: (node.querySelector('[data-e2e="comment-level-1"] p, [data-e2e="comment-text"], p')?.textContent || node.textContent || '').trim(),
-                          published_at: (node.querySelector('[data-e2e="comment-time-1"], time, span[class*="SpanCreatedTime"]')?.textContent || '').trim(),
-                          likes: (node.querySelector('[data-e2e="comment-like-count"], span[class*="SpanLikeCount"]')?.textContent || '').trim(),
-                          replies: (node.querySelector('[data-e2e="view-more-1"], div[class*="DivReplyActionContainer"]')?.textContent || '').trim()
-                        }))""")
-                        stable = stable + 1 if len(current) <= len(items) else 0
-                        items = current
-                        page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        page.wait_for_timeout(1000)
-                    content = page.content()
-                    if not items and re.search(r"captcha|verify|challenge|robot.?check|验证码", content, re.I):
-                        # TikTok 评论接口经常要求登录/验证。保留目标视频作为可预览记录，
-                        # 避免整个预览流程卡死；正式采集时会在结果中标注评论不可用。
-                        return [{"url": video_url, "detail_url": "", "prefill": {
-                            "url": video_url, "text": "", "author": "", "username": "",
-                            "published_at": "", "likes": "", "replies": "",
-                            "collection_note": "TikTok 要求登录或访问验证，未能读取公开评论"
-                        }}]
-                finally:
-                    browser.close()
-        except ImportError as exc:
-            raise RuntimeError("评论采集需要安装 Playwright 浏览器运行环境") from exc
-        rows = self._tiktok_comment_rows(items, video_url)[:maximum]
-        if not rows:
-            # 页面可正常展示评论时，评论接口可能延迟或 DOM 结构变化；
-            # 不再将其升级为预览失败，返回视频占位记录供字段点选。
-            return [{"url": video_url, "detail_url": "", "prefill": {
-                "url": video_url, "collection_note": "页面未返回可解析的评论内容，请稍后重试"
-            }}]
-        return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
+    def _tiktok_extract(self, url, request, flat=False):
+        return tiktok.extract(url, request, flat)
 
-    def _discover_douyin_data(self, value, request, task_id=None):
-        from .douyin_profiles import aweme_comments, discover_profiles, search_awemes, user_awemes
-        mode = str(request.get("tiktok_mode") or "keyword").lower()
-        requested = int(request.get("max_items") or 50)
-        maximum = 500 if requested < 0 else min(500, max(1, requested))
-        if task_id:
-            labels = {"keyword": "搜索关键词视频", "comments": "读取视频评论", "user": "读取账号信息", "videos": "读取账号视频"}
-            self._update(task_id, status="running", message=f"正在抖音{labels.get(mode, '采集')}", progress=10)
-        if mode == "user":
-            return discover_profiles(value, request)
-        if mode == "comments":
-            video_url = self._tiktok_video_url(value)
-            match = re.search(r"/video/(\d+)", video_url)
-            if not video_url or not match:
-                raise ValueError("请输入完整的抖音视频链接")
-            rows = aweme_comments(match.group(1), video_url, request, maximum)
-            if not rows:
-                raise RuntimeError("抖音未返回公开评论；请确认视频可访问并提供有效登录 Cookie 后重试")
-            return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
-        if mode == "videos":
-            profiles = discover_profiles(value, request)
-            targets = []
-            for profile in profiles:
-                sec_uid = unquote(urlparse(profile["url"]).path.rsplit('/', 1)[-1])
-                rows = user_awemes(sec_uid, request, maximum)
-                for row in rows:
-                    targets.append({"url": row["url"], "detail_url": "", "prefill": row})
-            if not targets:
-                raise RuntimeError("抖音未返回账号公开视频；请确认账号主页与登录 Cookie 有效")
-            return targets[:maximum]
-        direct = self._tiktok_video_url(value)
-        if direct:
-            try:
-                row = self._tiktok_video_row(self._tiktok_extract(direct, request))
-            except RuntimeError:
-                row = {"url": direct}
-            row["url"] = row.get("url") or direct
-            return [{"url": direct, "detail_url": "", "prefill": row}]
-        rows = search_awemes(str(value or "").strip(), request, maximum)
-        if not rows:
-            raise RuntimeError("抖音未返回关键词视频；请提供有效登录 Cookie 后重试")
-        return [{"url": row["url"], "detail_url": "", "prefill": row} for row in rows]
+    def _tiktok_oembed_row(self, url, request):
+        return tiktok.oembed_row(url, request, ManagerHttpBridge(self))
 
-    def _discover_tiktok_data(self, value, request, task_id=None):
-        mode = str(request.get("tiktok_mode") or "keyword").lower()
+    def _discover_tiktok_index_urls(self, keyword, request, maximum):
+        return tiktok.index_urls(keyword, request, maximum, ManagerHttpBridge(self))
+
+    def _discover_tiktok_browser_urls(self, keyword, request, maximum, browser=None):
+        return tiktok.browser_urls(keyword, request, maximum, browser)
+
+    def _discover_tiktok_user(self, account, request, task_id=None, browser=None):
+        return tiktok.user(account, self._discover_context(request, task_id, browser))
+
+    def _discover_tiktok_account_videos(self, account, request, task_id=None):
+        return tiktok.account_videos(account, self._discover_context(request, task_id))
+
+    def _discover_tiktok_keyword_videos(self, keyword, request, task_id=None, browser=None):
+        return tiktok.keyword_videos(keyword, self._discover_context(request, task_id, browser))
+
+    def _discover_tiktok_comments(self, value, request, task_id=None, browser=None):
+        return tiktok.comments(value, self._discover_context(request, task_id, browser))
+
+    def _discover_douyin_data(self, value, request, task_id=None, browser=None):
+        return douyin.discover(value, self._discover_context(request, task_id, browser))
+
+    def _discover_tiktok_data(self, value, request, task_id=None, browser=None):
+        """tiktok 与 douyin 共用一个入口；抖音的分发实现在 crawler_adapters/douyin.py。"""
         if request.get("source") == "douyin":
-            return self._discover_douyin_data(value, request, task_id)
-        if mode == "user":
-            return self._discover_tiktok_user(value, request, task_id)
-        if mode == "videos":
-            return self._discover_tiktok_account_videos(value, request, task_id)
-        if mode == "comments":
-            return self._discover_tiktok_comments(value, request, task_id)
-        return self._discover_tiktok_keyword_videos(value, request, task_id)
+            return self._discover_douyin_data(value, request, task_id, browser=browser)
+        return tiktok.discover(value, self._discover_context(request, task_id, browser))
 
+
+    # Telegram 的实现已经搬到 crawler_adapters/telegram.py，这里只留委托。
     @staticmethod
     def _telegram_target(value):
-        text = str(value or "").strip()
-        match = re.search(r"(?:https?://)?(?:t|telegram)\.me/(?:s/|joinchat/|\+)?([A-Za-z0-9_+-]+)", text, re.I)
-        if match:
-            return match.group(1), f"https://t.me/{match.group(1)}"
-        if re.fullmatch(r"@[A-Za-z0-9_]{5,}", text):
-            return text[1:], f"https://t.me/{text[1:]}"
-        if re.fullmatch(r"[A-Za-z0-9_]{5,}", text):
-            return text, f"https://t.me/{text}"
-        return text, text
+        return telegram.parse_target(value)
 
     @staticmethod
     def _telegram_public_rows(html, chat, maximum):
-        soup = BeautifulSoup(html or "", "html.parser")
-        rows = []
-        for item in soup.select(".tgme_widget_message_wrap"):
-            message = item.select_one(".tgme_widget_message") or item
-            post = str(message.get("data-post") or "")
-            message_id = post.rsplit("/", 1)[-1] if "/" in post else ""
-            text_node = item.select_one(".tgme_widget_message_text")
-            author_node = item.select_one(".tgme_widget_message_author_name")
-            time_node = item.select_one("time")
-            views_node = item.select_one(".tgme_widget_message_views")
-            forwards_node = item.select_one(".tgme_widget_message_forwards")
-            replies_node = item.select_one(".tgme_widget_message_replies")
-            link = item.select_one("a.tgme_widget_message_date")
-            url = str(link.get("href") or "") if link else (f"https://t.me/{post}" if post else "")
-            media = []
-            for image in item.select(".tgme_widget_message_photo_wrap, img"):
-                style = str(image.get("style") or "")
-                found = re.search(r"url\(['\"]?([^)'\"]+)", style)
-                value = found.group(1) if found else str(image.get("src") or "")
-                if value and value not in media:
-                    media.append(value)
-            row = {
-                "message_id": message_id, "text": _structured_text(text_node) if text_node else "",
-                "author": _text(author_node), "published_at": time_node.get("datetime", "") if time_node else "",
-                "views": _text(views_node), "forwards": _text(forwards_node), "replies": _text(replies_node),
-                "media": "\n".join(media), "chat": chat, "url": url,
-            }
-            if row["text"] or row["media"]:
-                rows.append(row)
-        return rows[-maximum:]
+        return telegram.public_rows(html, chat, maximum)
 
     def _telegram_credentials(self, request):
-        api_id = str(request.get("telegram_api_id") or os.getenv("TELEGRAM_API_ID") or "").strip()
-        api_hash = str(request.get("telegram_api_hash") or os.getenv("TELEGRAM_API_HASH") or "").strip()
-        session = str(request.get("telegram_session") or os.getenv("TELEGRAM_SESSION") or "").strip()
-        if not api_id or not api_hash or not session:
-            raise ValueError("此模式需要 Telegram API ID、API Hash 和已授权会话字符串")
-        try:
-            return int(api_id), api_hash, session
-        except ValueError as exc:
-            raise ValueError("Telegram API ID 必须是数字") from exc
-
-    async def _telegram_api_collect_async(self, value, request, mode, maximum):
-        try:
-            from telethon import TelegramClient
-            from telethon.sessions import StringSession
-        except ImportError as exc:
-            raise RuntimeError("Telegram API 采集组件未安装，请安装 Telethon") from exc
-        api_id, api_hash, session = self._telegram_credentials(request)
-        client = TelegramClient(StringSession(session), api_id, api_hash)
-        await client.connect()
-        try:
-            if not await client.is_user_authorized():
-                raise RuntimeError("Telegram 会话已失效，请重新生成授权会话")
-            if mode == "members":
-                target, _ = self._telegram_target(value)
-                entity = await client.get_entity(target)
-                rows = []
-                async for user in client.iter_participants(entity, limit=maximum):
-                    status = type(user.status).__name__.replace("UserStatus", "") if user.status else ""
-                    rows.append({
-                        "user_id": user.id, "username": user.username or "",
-                        "display_name": " ".join(part for part in (user.first_name, user.last_name) if part),
-                        "bio": "", "bot": bool(user.bot), "verified": bool(user.verified), "status": status,
-                        "url": f"https://t.me/{user.username}" if user.username else "",
-                    })
-                return rows
-            iterator = client.iter_messages(None, search=value, limit=maximum) if mode == "search" else \
-                client.iter_messages((await client.get_entity(self._telegram_target(value)[0])), limit=maximum)
-            rows = []
-            async for message in iterator:
-                chat = await message.get_chat()
-                sender = await message.get_sender()
-                username = getattr(chat, "username", None)
-                url = f"https://t.me/{username}/{message.id}" if username else ""
-                rows.append({
-                    "message_id": message.id, "text": message.message or "",
-                    "author": " ".join(part for part in (getattr(sender, "first_name", ""), getattr(sender, "last_name", "")) if part) or getattr(sender, "username", ""),
-                    "published_at": message.date, "views": message.views or "", "forwards": message.forwards or "",
-                    "replies": getattr(message.replies, "replies", "") if message.replies else "",
-                    "media": type(message.media).__name__ if message.media else "",
-                    "chat": getattr(chat, "title", "") or username or "", "url": url,
-                })
-            return rows
-        finally:
-            await client.disconnect()
-
-    def _telegram_api_collect(self, value, request, mode, maximum):
-        try:
-            return asyncio.run(self._telegram_api_collect_async(value, request, mode, maximum))
-        except (ValueError, RuntimeError):
-            raise
-        except Exception as exc:
-            message = str(exc).splitlines()[-1]
-            if re.search(r"flood|wait", message, re.I):
-                raise RuntimeError("Telegram 请求过于频繁，请稍后重试") from exc
-            raise RuntimeError(f"Telegram API 采集失败：{message[:240]}") from exc
+        return telegram.credentials(request)
 
     def _discover_telegram_data(self, value, request, task_id=None):
-        mode = str(request.get("telegram_mode") or "channel").lower()
-        requested = int(request.get("max_items") or 50)
-        maximum = 500 if requested < 0 else min(500, max(1, requested))
-        if task_id:
-            labels = {"channel": "频道消息", "group": "群组消息", "members": "群组成员", "search": "全平台结果"}
-            self._update(task_id, status="running", message=f"正在查找 Telegram {labels.get(mode, '数据')}", progress=10)
-        rows = []
-        if mode in ("channel", "group"):
-            target, public_url = self._telegram_target(value)
-            if not target or not re.fullmatch(r"[A-Za-z0-9_]{5,}", target):
-                raise ValueError("请输入公开频道或群组链接，例如 https://t.me/example")
-            before = ""
-            seen_ids = set()
-            network_error = None
-            try:
-                while len(rows) < maximum:
-                    self._checkpoint(task_id)
-                    page_url = f"https://t.me/s/{target}" + (f"?before={before}" if before else "")
-                    response = self._request(page_url, request.get("proxies", []), timeout=25)
-                    page_rows = self._telegram_public_rows(_decode_response(response), target, maximum)
-                    fresh = [row for row in page_rows if row.get("message_id") not in seen_ids]
-                    if not fresh:
-                        break
-                    rows = fresh + rows
-                    seen_ids.update(row.get("message_id") for row in fresh if row.get("message_id"))
-                    numeric_ids = [int(row["message_id"]) for row in page_rows if str(row.get("message_id", "")).isdigit()]
-                    if not numeric_ids:
-                        break
-                    next_before = str(min(numeric_ids))
-                    if next_before == before:
-                        break
-                    before = next_before
-                    if len(rows) < maximum:
-                        time.sleep(request.get("delay_seconds", 1.0))
-                rows = rows[-maximum:]
-            except requests.RequestException as exc:
-                network_error = exc
-                rows = rows[-maximum:]
-            if not rows and all(request.get(key) or os.getenv(key.upper()) for key in (
-                    "telegram_api_id", "telegram_api_hash", "telegram_session")):
-                rows = self._telegram_api_collect(public_url, request, mode, maximum)
-            if not rows:
-                if network_error and re.search(r"timeout|timed out|connect", str(network_error), re.I):
-                    raise RuntimeError("无法连接 Telegram 公开页面，请在高级设置中配置可访问 Telegram 的代理")
-                raise RuntimeError("没有读取到公开消息；请确认链接公开可访问，私有群组需配置 Telegram 授权会话")
-        else:
-            rows = self._telegram_api_collect(value, request, mode, maximum)
-        return [{"url": row.get("url") or f"telegram:{mode}:{index}", "detail_url": "", "prefill": row}
-                for index, row in enumerate(rows, 1)]
+        return telegram.discover(value, self._discover_context(request, task_id))
 
     def capabilities(self):
         return {"youtube_keyword": True, "youtube_api_configured": bool(os.getenv("YOUTUBE_API_KEY")),
@@ -2522,54 +866,61 @@ class CrawlerTaskManager:
         keyword = str(payload.get("keyword") or "").strip()
         account_name = str(payload.get("account_name") or "").strip()
         loaded_html = None
-        if source == "twitter":
-            raise ValueError("X 数据通过公开索引和官方嵌入页面返回固定字段，无需网页点选")
-        if source == "youtube":
-            if not keyword:
-                raise ValueError("请先输入 YouTube 搜索关键词")
-            url = self._discover_youtube_urls(keyword, request)[0]
-            request["dynamic"] = True
-        elif source == "news":
-            url = _safe_url(url)
-            soup = BeautifulSoup(self._fetch_listing_html(url, request), "html.parser")
-            links = self._article_links(url, soup)
-            if not links:
-                raise ValueError("没有从新闻列表页找到可预览的详情文章")
-            url = links[0]
-        elif source == "wechat":
-            if url:
+        # 点选是交互路径，一次调用里每一步都可能要动态渲染 —— 收敛成同一个浏览器，
+        # 用户点一次「预览」不再冷启动好几次 Chromium。
+        with browser_scope(None, request.get("proxies")) as preview_browser:
+            if source == "twitter":
+                raise ValueError("X 数据通过公开索引和官方嵌入页面返回固定字段，无需网页点选")
+            if source == "youtube":
+                if not keyword:
+                    raise ValueError("请先输入 YouTube 搜索关键词")
+                url = self._discover_youtube_urls(keyword, request)[0]
+                request["dynamic"] = True
+            elif source == "news":
                 url = _safe_url(url)
+                soup = BeautifulSoup(self._fetch_listing_html(url, request, browser=preview_browser),
+                                     "html.parser")
+                links = self._article_links(url, soup)
+                if not links:
+                    raise ValueError("没有从新闻列表页找到可预览的详情文章")
+                url = links[0]
+            elif source == "wechat":
+                if url:
+                    url = _safe_url(url)
+                else:
+                    if not account_name:
+                        raise ValueError("请先输入公众号名称")
+                    articles = self._discover_wechat_urls(account_name, request,
+                                                          browser=preview_browser)
+                    for item in articles:
+                        candidate = str(item.get("detail_url") or "")
+                        if urlparse(candidate).hostname != "mp.weixin.qq.com":
+                            continue
+                        try:
+                            candidate_html = self._fetch_html(candidate, request,
+                                                              browser=preview_browser)
+                        except requests.RequestException:
+                            continue
+                        if self._wechat_preview_content(BeautifulSoup(candidate_html, "html.parser")) is not None:
+                            url, loaded_html = candidate, candidate_html
+                            break
+                    if loaded_html is None:
+                        raise RuntimeError(
+                            f"已找到“{account_name}”的公开文章索引，"
+                            "但候选原文未返回可预览的正文，请稍后重试或更换文章链接。"
+                        )
             else:
-                if not account_name:
-                    raise ValueError("请先输入公众号名称")
-                articles = self._discover_wechat_urls(account_name, request)
-                for item in articles:
-                    candidate = str(item.get("detail_url") or "")
-                    if urlparse(candidate).hostname != "mp.weixin.qq.com":
-                        continue
-                    try:
-                        candidate_html = self._fetch_html(candidate, request)
-                    except requests.RequestException:
-                        continue
-                    if self._wechat_preview_content(BeautifulSoup(candidate_html, "html.parser")) is not None:
-                        url, loaded_html = candidate, candidate_html
-                        break
-                if loaded_html is None:
-                    raise RuntimeError(
-                        f"已找到“{account_name}”的公开文章索引，"
-                        "但候选原文未返回可预览的正文，请稍后重试或更换文章链接。"
-                    )
-        else:
-            url = _safe_url(url)
-        html = loaded_html if loaded_html is not None else self._fetch_html(url, request)
-        soup = BeautifulSoup(html, "html.parser")
-        # 普通静态请求若只拿到“载入中”骨架，自动用浏览器完成一次渲染，
-        # 无需非技术用户预先知道并勾选“动态内容”。
-        if source not in ("youtube", "wechat") and not request.get("dynamic") \
-                and self._preview_is_loading_shell(soup):
-            dynamic_request = {**request, "dynamic": True}
-            html = self._fetch_html(url, dynamic_request)
+                url = _safe_url(url)
+            html = loaded_html if loaded_html is not None else self._fetch_html(
+                url, request, browser=preview_browser)
             soup = BeautifulSoup(html, "html.parser")
+            # 普通静态请求若只拿到“载入中”骨架，自动用浏览器完成一次渲染，
+            # 无需非技术用户预先知道并勾选“动态内容”。
+            if source not in ("youtube", "wechat") and not request.get("dynamic") \
+                    and self._preview_is_loading_shell(soup):
+                dynamic_request = {**request, "dynamic": True}
+                html = self._fetch_html(url, dynamic_request, browser=preview_browser)
+                soup = BeautifulSoup(html, "html.parser")
         if source == "youtube":
             # YouTube 的正文依赖大量客户端脚本；移除脚本后只剩骨架屏，无法可靠点选。
             # 使用官方嵌入播放器展示真实视频，并在下方保留可点选的结构化字段。
@@ -2679,6 +1030,9 @@ class CrawlerTaskManager:
         account_name = str(payload.get("account_name") or "").strip()
         # 预览只用于确认字段和展现形式，最多读取三条，避免误触发大批量采集。
         sample_size = min(3, max(1, int(payload.get("sample_size") or 3)))
+        douyin_cookie = str(payload.get("douyin_cookie") or "").strip()
+        if source == "douyin" and not douyin_cookie:
+            douyin_cookie = self._saved_douyin_cookie()
         request = {
             "source": source, "urls": urls, "keyword": keyword, "account_name": account_name,
             "twitter_mode": str(payload.get("twitter_mode") or "keyword"),
@@ -2688,7 +1042,7 @@ class CrawlerTaskManager:
             "telegram_api_id": str(payload.get("telegram_api_id") or "").strip(),
             "telegram_api_hash": str(payload.get("telegram_api_hash") or "").strip(),
             "telegram_session": str(payload.get("telegram_session") or "").strip(),
-            "douyin_cookie": str(payload.get("douyin_cookie") or "").strip(),
+            "douyin_cookie": douyin_cookie,
             "proxies": payload.get("proxies") or [], "dynamic": bool(payload.get("dynamic")),
             "max_items": sample_size,
             "delay_seconds": max(0.2, float(payload.get("delay_seconds") or 0.4)),
@@ -2727,57 +1081,60 @@ class CrawlerTaskManager:
         if source not in ("twitter", "youtube", "tiktok", "douyin", "telegram", "wechat") and not urls:
             raise ValueError("请先输入网页或新闻列表页地址")
 
-        if source == "news":
-            targets = self._discover_news_urls(urls, request)[:sample_size]
-        elif source == "wechat":
-            targets = []
-            if account_name:
-                targets.extend(self._discover_wechat_urls(account_name, request)[:sample_size])
-            known = {item.get("url") for item in targets if isinstance(item, dict)}
-            targets.extend(url for url in urls if url not in known)
-            targets = targets[:sample_size]
-        elif source == "youtube":
-            targets = self._discover_youtube_data(keyword, request)[:sample_size]
-        elif source == "twitter":
-            targets = self._discover_twitter_posts(keyword, request)[:sample_size]
-        elif source in ("tiktok", "douyin"):
-            try:
-                targets = self._discover_tiktok_data(keyword, request)[:sample_size]
-            except RuntimeError as exc:
-                # 评论页面可公开浏览但接口偶发返回登录提示；仍允许用视频链接完成字段预览。
-                if request.get("tiktok_mode") == "comments":
-                    video_url = self._tiktok_video_url(keyword)
-                    if video_url:
-                        targets = [{"url": video_url, "detail_url": "", "prefill": {
-                            "url": video_url, "collection_note": str(exc)}}]
+        # 同 preview：发现与取样共用一次调用里的同一个浏览器。
+        with browser_scope(None, request.get("proxies")) as preview_browser:
+            if source == "news":
+                targets = self._discover_news_urls(urls, request, browser=preview_browser)[:sample_size]
+            elif source == "wechat":
+                targets = []
+                if account_name:
+                    targets.extend(self._discover_wechat_urls(account_name, request,
+                                                              browser=preview_browser)[:sample_size])
+                known = {item.get("url") for item in targets if isinstance(item, dict)}
+                targets.extend(url for url in urls if url not in known)
+                targets = targets[:sample_size]
+            elif source in ("youtube", "twitter", "telegram"):
+                targets = self._discover_for(source, keyword, request,
+                                             browser=preview_browser)[:sample_size]
+            elif source in ("tiktok", "douyin"):
+                try:
+                    targets = self._discover_for(source, keyword, request,
+                                                 browser=preview_browser)[:sample_size]
+                except RuntimeError as exc:
+                    # 评论页面可公开浏览但接口偶发返回登录提示；仍允许用视频链接完成字段预览。
+                    if request.get("tiktok_mode") == "comments":
+                        video_url = self._tiktok_video_url(keyword)
+                        if video_url:
+                            targets = [{"url": video_url, "detail_url": "", "prefill": {
+                                "url": video_url, "collection_note": str(exc)}}]
+                        else:
+                            raise
                     else:
                         raise
-                else:
-                    raise
-        elif source == "telegram":
-            targets = self._discover_telegram_data(keyword, request)[:sample_size]
-        else:
-            targets = urls[:sample_size]
+            elif source == "telegram":
+                targets = self._discover_telegram_data(keyword, request)[:sample_size]
+            else:
+                targets = urls[:sample_size]
 
-        rows, errors = [], []
-        for target in targets:
-            url = target.get("url", "") if isinstance(target, dict) else target
-            try:
-                if isinstance(target, dict) and target.get("prefill") and not target.get("detail_url"):
-                    row = self._selected_prefill_row(fields, target["prefill"])
-                else:
-                    html = self._fetch_html(url, request)
-                    row = self._extract(url, BeautifulSoup(html, "html.parser"), fields)
-                    if isinstance(target, dict):
-                        for key, value in target.get("prefill", {}).items():
-                            if key == "collection_note" or (key in row and not row[key]):
-                                row[key] = value
-                # 预览是配置结果，不是调试视图。丢弃发现流程或内置解析器
-                # 附带的 URL、collection_note 等未勾选字段。
-                row = {name: row.get(name, "") for name in names}
-                rows.append(_normalize_row_datetimes(row, fields))
-            except Exception as exc:
-                errors.append({"url": url, "error": str(exc)})
+            rows, errors = [], []
+            for target in targets:
+                url = target.get("url", "") if isinstance(target, dict) else target
+                try:
+                    if isinstance(target, dict) and target.get("prefill") and not target.get("detail_url"):
+                        row = self._selected_prefill_row(fields, target["prefill"])
+                    else:
+                        html = self._fetch_html(url, request, browser=preview_browser)
+                        row = self._extract(url, BeautifulSoup(html, "html.parser"), fields)
+                        if isinstance(target, dict):
+                            for key, value in target.get("prefill", {}).items():
+                                if key == "collection_note" or (key in row and not row[key]):
+                                    row[key] = value
+                    # 预览是配置结果，不是调试视图。丢弃发现流程或内置解析器
+                    # 附带的 URL、collection_note 等未勾选字段。
+                    row = {name: row.get(name, "") for name in names}
+                    rows.append(_normalize_row_datetimes(row, fields))
+                except Exception as exc:
+                    errors.append({"url": url, "error": str(exc)})
 
         if not rows:
             raise RuntimeError(errors[0]["error"] if errors else "没有找到可预览的采集数据")
@@ -2819,15 +1176,7 @@ class CrawlerTaskManager:
     def _extract(self, url, soup, fields):
         result = {"url": url}
         page_source = str(soup)
-        youtube_values = {}
-        if "youtube.com" in urlparse(url).netloc.lower():
-            for field_name, json_name in (("channel", "ownerChannelName"), ("views", "viewCount")):
-                match = re.search(rf'"{json_name}"\s*:\s*"((?:\\.|[^"\\])*)"', page_source)
-                if match:
-                    try:
-                        youtube_values[field_name] = json.loads(f'"{match.group(1)}"')
-                    except json.JSONDecodeError:
-                        youtube_values[field_name] = match.group(1)
+        youtube_values = youtube.page_values(url, page_source)
         automatic_selectors = {
             "title": ["meta[property='og:title']", "#activity-name", "h1", "title"],
             "description": ["meta[name='description']", "meta[property='og:description']", "article p"],
@@ -2898,7 +1247,7 @@ class CrawlerTaskManager:
                 result[name] = node.get(attr, "")
         return _normalize_row_datetimes(result, fields)
 
-    def _fetch_html(self, url, request):
+    def _fetch_html(self, url, request, browser=None):
         """动态页面可选使用 Playwright；未安装浏览器时给出明确错误。"""
         host = urlparse(url).netloc.lower()
         dynamic = bool(request.get("dynamic")) or host in getattr(self, "_dynamic_hosts", set())
@@ -2912,24 +1261,13 @@ class CrawlerTaskManager:
                 self._dynamic_hosts = set()
             self._dynamic_hosts.add(host)
         try:
-            from playwright.sync_api import sync_playwright
-            with sync_playwright() as playwright:
-                launch = {"headless": True}
-                proxies = request.get("proxies") or []
-                if proxies:
-                    proxy = str(proxies[0]).strip()
-                    launch["proxy"] = {"server": proxy if "://" in proxy else "http://" + proxy}
-                browser = playwright.chromium.launch(**launch)
+            with browser_scope(browser, request.get("proxies")) as engine:
+                context = engine.new_context(
+                    user_agent=UA_DESKTOP_FULL,
+                    locale="zh-CN",
+                    viewport={"width": 1440, "height": 1000},
+                )
                 try:
-                    context = browser.new_context(
-                        user_agent=(
-                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/128.0.0.0 Safari/537.36"
-                        ),
-                        locale="zh-CN",
-                        viewport={"width": 1440, "height": 1000},
-                    )
                     page = context.new_page()
                     page.goto(url, wait_until="domcontentloaded", timeout=45000)
                     requested_host = urlparse(url).hostname
@@ -2965,7 +1303,7 @@ class CrawlerTaskManager:
                         page.wait_for_timeout(250)
                     return page.content()
                 finally:
-                    browser.close()
+                    context.close()
         except ImportError as exc:
             raise RuntimeError("动态采集需要安装 Playwright 浏览器运行环境") from exc
 
@@ -3101,21 +1439,8 @@ class CrawlerTaskManager:
 
     @staticmethod
     def _fill_youtube_row(row, info):
-        upload_date = str(info.get("upload_date") or "")
-        if len(upload_date) == 8 and upload_date.isdigit():
-            upload_date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
-        values = {
-            "title": info.get("title"), "description": info.get("description"),
-            "channel": info.get("channel") or info.get("uploader"),
-            "published_at": info.get("timestamp") or upload_date,
-            "duration": info.get("duration_string") or info.get("duration"),
-            "views": info.get("view_count"), "likes": info.get("like_count"),
-            "thumbnail": info.get("thumbnail"), "url": info.get("webpage_url"),
-        }
-        for key in list(row):
-            if key in values and values[key] not in (None, ""):
-                row[key] = values[key]
-        return _normalize_row_datetimes(row)
+        """实现已搬到 crawler_adapters/youtube.py，下载路径仍从这里调用。"""
+        return youtube.fill_row(row, info)
 
     @classmethod
     def _fill_tiktok_download_row(cls, row, info, prefill=None):
@@ -3130,13 +1455,40 @@ class CrawlerTaskManager:
                 row[key] = value
         return _normalize_row_datetimes(row)
 
+    def _saved_douyin_cookie(self):
+        """扫码登录存下来的那份抖音 cookie（没有就是空串）。
+
+        每次都读盘、不走 `_secrets_for` 的内存缓存：用户重新扫码，图的就是覆盖掉
+        那份过期的旧值，缓存会让刷新看不见。
+        """
+        return str(load_secrets(self.data_dir, GLOBAL_COOKIE_TASK_ID).get("douyin_cookie") or "")
+
+    def _secrets_for(self, task_id):
+        """任务的登录态：内存优先，内存没有就回落到磁盘。
+
+        回落到磁盘是服务重启后的正路 —— cookie 不再随内存一起消失。读回来的会回填进
+        `task_secrets`，省掉之后每次运行都再读一遍文件。
+        """
+        known = getattr(self, "task_secrets", {}).get(task_id)
+        if known:
+            return known
+        restored = load_secrets(self.data_dir, task_id)
+        if restored:
+            if getattr(self, "task_secrets", None) is None:
+                self.task_secrets = {}
+            self.task_secrets[task_id] = restored
+        return restored
+
     def _run(self, task_id):
         run_id = self._start_run(task_id)
         task_dir = self.data_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         task = self.tasks.get(task_id) or {}
         reuse_youtube_targets = task.pop("_retry_youtube_targets", False)
-        request = {**task.get("request", {}), **getattr(self, "task_secrets", {}).get(task_id, {})}
+        request = {**task.get("request", {}), **self._secrets_for(task_id)}
+        # 一次任务共用一个采集浏览器：进程只在第一次真需要渲染时才启动，
+        # 任务内几十个页面不再各自冷启动一次 Chromium。
+        run_browser = CrawlerBrowser(request.get("proxies"))
         rows, errors = [], []
         try:
             source = request.get("source", "generic")
@@ -3153,13 +1505,15 @@ class CrawlerTaskManager:
             if source == "telegram" and request.get("telegram_mode") == "members":
                 unit = "个成员"
             if source == "news":
-                urls = self._discover_news_urls(request.get("urls", []), request, task_id)
+                urls = self._discover_news_urls(request.get("urls", []), request, task_id,
+                                                browser=run_browser)
             elif source == "wechat":
                 direct_urls = request.get("urls", [])
                 discovered = []
                 if request.get("account_name"):
                     try:
-                        discovered = self._discover_wechat_urls(request.get("account_name", ""), request, task_id)
+                        discovered = self._discover_wechat_urls(request.get("account_name", ""), request, task_id,
+                                                                browser=run_browser)
                     except (RuntimeError, requests.RequestException):
                         if not direct_urls:
                             raise
@@ -3170,14 +1524,12 @@ class CrawlerTaskManager:
                 if reuse_youtube_targets and targets_file.is_file():
                     urls = json.loads(targets_file.read_text("utf-8"))
                 else:
-                    urls = self._discover_youtube_data(request.get("keyword", ""), request, task_id)
+                    urls = self._discover_for(source, request.get("keyword", ""), request, task_id,
+                                              run_browser)
                     targets_file.write_text(json.dumps(urls, ensure_ascii=False), "utf-8")
-            elif source == "twitter":
-                urls = self._discover_twitter_posts(request.get("keyword", ""), request, task_id)
-            elif source in ("tiktok", "douyin"):
-                urls = self._discover_tiktok_data(request.get("keyword", ""), request, task_id)
-            elif source == "telegram":
-                urls = self._discover_telegram_data(request.get("keyword", ""), request, task_id)
+            elif source in ("twitter", "tiktok", "douyin", "telegram"):
+                urls = self._discover_for(source, request.get("keyword", ""), request, task_id,
+                                          run_browser)
             else:
                 urls = request.get("urls", [])
             if source != "generic":
@@ -3238,7 +1590,7 @@ class CrawlerTaskManager:
                         rows.append(_normalize_row_datetimes(row, request.get("fields", [])))
                         completed_urls.add(discovered_url(target))
                         continue
-                    html = self._fetch_html(url, request)
+                    html = self._fetch_html(url, request, browser=run_browser)
                     row = self._extract(url, BeautifulSoup(html, "html.parser"), request.get("fields", []))
                     if isinstance(target, dict):
                         for key, value in target.get("prefill", {}).items():
@@ -3303,7 +1655,6 @@ class CrawlerTaskManager:
                     pd.DataFrame(rows).to_excel(output, index=False)
             result_file = None if output_format == "postgresql" else output.name
             video_count = 0
-            video_count = 0
             if download_videos:
                 self._update(task_id, progress=98, message="正在打包数据表格和视频文件")
                 if errors:
@@ -3331,6 +1682,10 @@ class CrawlerTaskManager:
                 message = f"部分下载完成 · 成功 {video_count} 个，失败 {len(errors)} 个，可重新采集重试"
             elif output_format == "postgresql":
                 message = f"数据库写入完成 · 新增 {sql_result['inserted']} 条，去重 {sql_result['duplicates']} 条"
+            elif errors:
+                # 非下载场景过去只报成功条数，个别 URL 抓失败就静默了 —— 用户看到
+                # 「采集完成」会以为全都拿到了。逐条明细仍在 result.errors 里。
+                message = f"采集完成 · 成功 {len(rows)} 条，失败 {len(errors)} 条"
             if int(request.get("max_items") or 50) == -1:
                 tmp_seen = seen_file.with_suffix(".tmp")
                 tmp_seen.write_text(json.dumps(sorted(seen), ensure_ascii=False), "utf-8")
@@ -3340,6 +1695,7 @@ class CrawlerTaskManager:
             self._update(task_id, status="failed", message="采集失败", error=str(exc), result={"failed_count": len(errors), "errors": errors})
         finally:
             self.controls.pop(task_id, None)
+            run_browser.close()
             self.active_runs.pop(task_id, None)
 
     def control(self, task_id, action):

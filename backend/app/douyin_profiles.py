@@ -1,5 +1,6 @@
 """Read Douyin profiles from its browser-rendered public user search."""
 import base64
+import logging
 import os
 import random
 import re
@@ -9,11 +10,19 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urlpar
 
 import requests
 
+from .crawler_browser import browser_scope
+from .crawler_http import UA_DESKTOP_FULL, UA_DOUYIN
 from .douyin_xbogus import XBogus
 
+try:
+    from .douyin_abogus import ABogus, BrowserFingerprintGenerator
+except ImportError:  # 没装 gmssl 就退回旧签名，采集降级但整个模块不能因此 import 不了
+    ABogus = BrowserFingerprintGenerator = None
 
-_DOUYIN_UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-              'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36')
+
+_DOUYIN_UA = UA_DOUYIN
+
+logger = logging.getLogger(__name__)
 
 
 def _cookie_values(cookie_header):
@@ -73,6 +82,28 @@ def profile_link_rows(items, target):
             'url': f'https://www.douyin.com/user/{uid}',
         }
     return list(found.values())
+
+
+# 抖音把人机验证（滑块拼图）弹在搜索结果的位置上。它的文案里**没有**「验证码」
+# 三个字，也没提「登录」，只认这几句原话，否则会把「要求验证」误判成「搜不到账号」，
+# 让用户去反复换昵称和主页链接 —— 那条路永远走不通。
+_VERIFY_MARKS = ('请完成下列验证', '完成验证后继续', '拖动完成', '安全验证', '验证码')
+# 滑块本身渲染在 rmc.bytedance.com 的 iframe 里。弹出验证时主文档正文几乎被清空
+# （实测只剩 4 个字符），光看正文一定漏判，iframe 才是可靠信号。
+_VERIFY_FRAME_MARKS = ('verifycenter', '/captcha')
+
+
+def _needs_verify(page):
+    """页面是不是抖音的风控挑战。先认 iframe，再退回正文文案。"""
+    for frame in page.frames:
+        url = str(getattr(frame, 'url', '') or '')
+        if any(mark in url for mark in _VERIFY_FRAME_MARKS):
+            return True
+    try:
+        body = page.locator('body').inner_text(timeout=5000)
+    except Exception:
+        return False
+    return any(mark in str(body or '') for mark in _VERIFY_MARKS)
 
 
 def profile_index_rows(items, target):
@@ -176,6 +207,28 @@ def profile_rows(payload, target):
     return list(found.values())
 
 
+def _signed_url(endpoint, query):
+    """给接口 URL 签名，返回 (完整 URL, 配套的 User-Agent)。
+
+    a_bogus 才是现在抖音认的签名。旧的 X-Bogus 会被风控直接判定成机器请求：
+    实测同一个搜索请求，X-Bogus 返回 search_nil_info 的 antispam_check /
+    hit_shark，换成 a_bogus 才会走到正常的业务分支。所以只有在 abogus 模块
+    整个不可用（没装 gmssl）时才退回 X-Bogus —— 那条路大概率拿不到数据，
+    但至少不会让采集整体崩掉。
+    """
+    if ABogus is not None:
+        try:
+            # 指纹和 UA 必须跟请求头里发出去的那份一致，否则签名自相矛盾。
+            fingerprint = BrowserFingerprintGenerator.generate_fingerprint('Chrome')
+            signer = ABogus(fp=fingerprint, user_agent=_DOUYIN_UA)
+            signed, _abogus, ua, _body = signer.generate_abogus(query, '')
+            return f'{endpoint}?{signed}', ua
+        except Exception as exc:
+            logger.warning('生成 a_bogus 失败，本次退回 X-Bogus：%s', exc)
+    signed_url, _, ua = XBogus(_DOUYIN_UA).build(f'{endpoint}?{query}')
+    return signed_url, ua
+
+
 def enrich_profile(row, request):
     """Fill restricted profile fields using a signed request and the user's logged-in session.
 
@@ -204,7 +257,7 @@ def enrich_profile(row, request):
         # Fresh signatures are important: an empty 200 response is a known
         # Douyin risk-control response, so retry once with another signature.
         for attempt in range(2):
-            signed_url, _, signed_ua = XBogus(_DOUYIN_UA).build(f'{endpoint}?{urlencode(query)}')
+            signed_url, signed_ua = _signed_url(endpoint, urlencode(query))
             response = session.get(signed_url, headers={**headers, 'User-Agent': signed_ua}, timeout=20)
             if response.content:
                 try:
@@ -237,26 +290,22 @@ def enrich_profile(row, request):
             'avatar': avatar_urls[0] if avatar_urls else row.get('avatar', '')}
 
 
-def discover_profiles(value, request):
-    from playwright.sync_api import sync_playwright
+def discover_profiles(value, request, browser=None):
     accounts = list(dict.fromkeys(x.strip().lstrip('@') for x in re.split(r'[\n,，;；]+', str(value)) if x.strip()))
     targets = []
-    with sync_playwright() as p:
-        options = {'headless': True}
-        proxies = request.get('proxies') or []
-        if proxies:
-            proxy = str(proxies[0])
-            options['proxy'] = {'server': proxy if '://' in proxy else 'http://' + proxy}
-        browser = p.chromium.launch(**options)
+    # 搜索页对未登录访客只渲染导航空壳，连搜索接口都不会请求，所以表单里
+    # 填了 cookie 就必须带进浏览器上下文 —— 否则用户永远搜不到自己的账号。
+    cookies = _cookie_values(request.get('douyin_cookie'))
+    with browser_scope(browser, request.get('proxies')) as engine:
+        context = engine.new_context(
+            user_agent=UA_DESKTOP_FULL,
+            locale='zh-CN', viewport={'width': 1440, 'height': 1000},
+        )
+        if cookies:
+            # new_context 不收 cookies 参数，只能建好上下文再灌。
+            context.add_cookies([{'name': name, 'value': value, 'domain': '.douyin.com', 'path': '/'}
+                                 for name, value in cookies.items()])
         try:
-            context = browser.new_context(
-                user_agent=(
-                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/128.0.0.0 Safari/537.36'
-                ),
-                locale='zh-CN', viewport={'width': 1440, 'height': 1000},
-            )
             page = context.new_page()
             for account in accounts:
                 parsed = urlparse(account)
@@ -280,9 +329,15 @@ def discover_profiles(value, request):
                 page.on('response', receive)
                 try:
                     page.goto(url, wait_until='domcontentloaded', timeout=45000)
-                    for _ in range(20):
+                    # 搜索页是个 SPA：domcontentloaded 只代表导航壳出来了，搜索应用的
+                    # JS 包（合计十几 MB）下完才开始发请求。实测慢网络下要 40 秒开外，
+                    # 等 10 秒只会看到一片空骨架屏，然后误报成「搜不到账号」。
+                    for tick in range(120):
                         page.wait_for_timeout(500)
                         if rows:
+                            break
+                        # 每 5 秒瞟一眼有没有弹验证。弹了就别再耗满 60 秒。
+                        if tick % 10 == 9 and _needs_verify(page):
                             break
                     if not rows:
                         links = page.locator('a[href*="/user/"]').evaluate_all(r'''(elements, target) => elements.map(link => {
@@ -308,16 +363,32 @@ def discover_profiles(value, request):
                         rows[row['url']] = row
                     if not rows:
                         body = page.locator('body').inner_text(timeout=5000)
-                        reason = '页面要求登录或访问验证' if any(x in body for x in ('扫码登录', '验证码', '安全验证')) else '公开用户搜索没有返回可读取的匹配账号'
-                        raise RuntimeError(f'抖音账号“{name}”：{reason}。可尝试填写完整用户主页链接；昵称不能直接当作用户 ID。')
+                        # 人机验证要排在登录判断前面：验证弹窗盖住页面时正文里
+                        # 也可能有「登录」字样，先撞上那句提示会给出完全错误的指引。
+                        # 这是抖音对当前网络/设备的判定，换昵称、换主页链接都没用，
+                        # 只能由人在真实浏览器里把滑块拖过去。
+                        if _needs_verify(page):
+                            raise RuntimeError(
+                                f'抖音账号“{name}”：抖音要求人机验证（滑块拼图），'
+                                '自动采集无法继续。请在浏览器里打开抖音、完成一次搜索并'
+                                '拖过滑块，验证通过后稍等片刻再重试；'
+                                'Cookie 无效或本机网络被判定为异常都会触发这个验证。')
+                        # 未登录时页面只渲染导航栏那个「登录」入口，不会出现
+                        # 「扫码登录」这类更强的字样，判定词必须包括它；这时该
+                        # 做的是补 cookie，而不是让用户去猜昵称和用户 ID 的区别。
+                        if any(x in body for x in ('扫码登录', '登录')):
+                            hint = ('当前填写的抖音 Cookie 未能通过校验，请更新后重试'
+                                    if cookies else '抖音搜索用户需要登录，请先填写抖音 Cookie 再重试')
+                            raise RuntimeError(f'抖音账号“{name}”：{hint}。')
+                        raise RuntimeError(f'抖音账号“{name}”：公开用户搜索没有返回可读取的匹配账号。'
+                                           '可尝试填写完整用户主页链接；昵称不能直接当作用户 ID。')
                     if len(rows) > 1:
                         raise ValueError(f'抖音存在多个名为“{name}”的账号，请填写目标账号的完整主页链接以避免采错')
                     targets.extend({'url': row['url'], 'detail_url': '', 'prefill': enrich_profile(row, request)} for row in rows.values())
                 finally:
                     page.remove_listener('response', receive)
-            context.close()
         finally:
-            browser.close()
+            context.close()
     return targets
 
 
@@ -336,7 +407,7 @@ def _request_payload(path, params, request, referer='https://www.douyin.com/'):
                'Accept-Language': 'zh-CN,zh;q=0.9'}
     try:
         for attempt in range(2):
-            signed_url, _, signed_ua = XBogus(_DOUYIN_UA).build(f'{endpoint}?{urlencode(query)}')
+            signed_url, signed_ua = _signed_url(endpoint, urlencode(query))
             response = session.get(signed_url, headers={**headers, 'User-Agent': signed_ua}, timeout=20)
             if response.content:
                 try:
@@ -376,6 +447,23 @@ def aweme_row(item):
     }
 
 
+def _raise_if_risk_controlled(payload):
+    """被风控拦下时抛出真实原因，别让调用方去猜「是不是关键词没结果」。
+
+    抖音拦截时返回的是 HTTP 200 + 空结果，只在 search_nil_info 里留下判据。
+    实测被拦时任何关键词都返回同一份判定 —— 连完全不存在的乱码词也一样 ——
+    所以看到 verify_check / antispam_check 就不该再往 Cookie 上归因。
+    """
+    nil = payload.get('search_nil_info') if isinstance(payload, dict) else None
+    nil_type = str((nil or {}).get('search_nil_type') or '')
+    if nil_type == 'verify_check':
+        raise RuntimeError('抖音要求人机验证（滑块拼图），自动采集无法继续。'
+                           '请在浏览器里打开抖音、完成一次搜索并拖过滑块，验证通过后再重试。')
+    if nil_type == 'antispam_check':
+        raise RuntimeError('抖音把本机请求判定成了异常流量（风控拦截）。请稍后重试；'
+                           '若持续失败，多半是当前网络出口被限制，换个网络通常能恢复。')
+
+
 def search_awemes(keyword, request, maximum):
     """Search Douyin videos using the same endpoint and params as douyin-downloader."""
     rows, seen, offset = [], set(), 0
@@ -385,6 +473,9 @@ def search_awemes(keyword, request, maximum):
             'publish_time': 0, 'search_source': 'normal_search', 'query_correct_type': '1',
             'is_filter_search': 0, 'offset': offset, 'count': min(20, maximum - len(rows)),
         }, request, 'https://www.douyin.com/search/' + quote(keyword, safe=''))
+        if not rows:
+            # 已经翻到过内容就别因为后面被拦而把前面的结果丢掉。
+            _raise_if_risk_controlled(payload)
         entries = payload.get('data') if isinstance(payload.get('data'), list) else []
         for entry in entries:
             item = entry.get('aweme_info') if isinstance(entry, dict) else None
@@ -411,6 +502,8 @@ def user_awemes(sec_uid, request, maximum):
             'time_list_query': '0', 'whale_cut_token': '', 'cut_version': '1',
             'publish_video_strategy_type': '2',
         }, request, f'https://www.douyin.com/user/{sec_uid}')
+        if not rows:
+            _raise_if_risk_controlled(payload)
         items = payload.get('aweme_list') if isinstance(payload.get('aweme_list'), list) else []
         for item in items:
             aweme_id = str(item.get('aweme_id') or '') if isinstance(item, dict) else ''
@@ -433,6 +526,8 @@ def aweme_comments(aweme_id, video_url, request, maximum):
             'aweme_id': aweme_id, 'cursor': cursor, 'count': min(20, maximum - len(rows)),
             'item_type': '0', 'insert_ids': '', 'whale_cut_token': '', 'cut_version': '1', 'rcFT': '',
         }, request, video_url)
+        if not rows:
+            _raise_if_risk_controlled(payload)
         items = payload.get('comments') if isinstance(payload.get('comments'), list) else []
         for item in items:
             user = item.get('user') if isinstance(item.get('user'), dict) else {}

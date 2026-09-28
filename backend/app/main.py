@@ -25,6 +25,7 @@ from .image_convert_manager import ImageConvertManager
 from .database_manager import DatabaseClient, DatabaseTaskManager
 from .propzone_manager import PropZoneTaskManager
 from .crawler_manager import CrawlerTaskManager
+from . import crawler_douyin_login
 from .word_batch_api import make_router as make_word_batch_router
 from .clean_api import make_router as make_clean_router
 from .links_api import make_router as make_links_router
@@ -1350,6 +1351,39 @@ def crawler_builtin_fields(source: str = "generic", twitter_mode: str = "keyword
 @app.get("/api/crawler/capabilities")
 def crawler_capabilities():
     return crawler_manager.capabilities()
+
+
+# 抖音扫码登录：拿 cookie 不要求用户会看开发者工具。没有任务归属，所以不放在任务路由里。
+@app.get("/api/crawler/douyin-login")
+def crawler_douyin_login_state():
+    return crawler_douyin_login.state(crawler_manager.data_dir)
+
+
+@app.post("/api/crawler/douyin-login/start")
+def crawler_douyin_login_start():
+    try:
+        return crawler_douyin_login.start_login(crawler_manager.data_dir)
+    except ValueError as exc:
+        # 已经在跑了 —— 请求本身没错，是当前状态不允许，409 而不是 400。
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/crawler/douyin-login/confirm")
+def crawler_douyin_login_confirm():
+    try:
+        crawler_douyin_login.confirm_login()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return crawler_douyin_login.state(crawler_manager.data_dir)
+
+
+@app.post("/api/crawler/douyin-login/cancel")
+def crawler_douyin_login_cancel():
+    try:
+        crawler_douyin_login.cancel_login()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return crawler_douyin_login.state(crawler_manager.data_dir)
 
 
 @app.post("/api/crawler/preview")

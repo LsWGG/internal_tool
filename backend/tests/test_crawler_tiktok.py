@@ -1,17 +1,21 @@
 import json
 import base64
+import tempfile
 import threading
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
+from app.crawler_adapters import tiktok
 from app.crawler_manager import CrawlerTaskManager
-from app.douyin_profiles import _cookie_values, _douyin_host, _profile_query, aweme_comments, search_awemes, user_awemes, enrich_profile, profile_index_rows, profile_link_rows, profile_rows
+from app.douyin_profiles import _cookie_values, _douyin_host, _profile_query, _signed_url, aweme_comments, search_awemes, user_awemes, discover_profiles, enrich_profile, profile_index_rows, profile_link_rows, profile_rows
 
 
 class TikTokCrawlerTests(unittest.TestCase):
     def setUp(self):
         self.manager = object.__new__(CrawlerTaskManager)
         self.manager._checkpoint = Mock()
+        self.manager._update = Mock()
 
     def test_mode_specific_builtin_fields(self):
         user = [item["name"] for item in self.manager.builtin_fields("tiktok", tiktok_mode="user")]
@@ -86,20 +90,21 @@ class TikTokCrawlerTests(unittest.TestCase):
 
     def test_public_index_is_used_when_tiktok_search_is_empty(self):
         self.manager._fetch_html = Mock(return_value="<html></html>")
-        self.manager._discover_tiktok_browser_urls = Mock(return_value=[])
-        self.manager._discover_tiktok_index_urls = Mock(return_value=[
-            "https://www.tiktok.com/@demo/video/123456"
-        ])
-        self.manager._tiktok_extract = Mock(side_effect=RuntimeError("blocked"))
-        self.manager._tiktok_oembed_row = Mock(return_value={
-            "title": "Demo video", "author": "Demo", "url": "https://www.tiktok.com/@demo/video/123456"
-        })
-        targets = self.manager._discover_tiktok_keyword_videos(
-            "demo", {"max_items": 3, "proxies": []}
-        )
+        index_urls = Mock(return_value=["https://www.tiktok.com/@demo/video/123456"])
+        # 三级回退都在适配器内部，patch 目标随之落到适配器模块。
+        with patch.object(tiktok, "browser_urls", Mock(return_value=[])), \
+                patch.object(tiktok, "index_urls", index_urls), \
+                patch.object(tiktok, "extract", Mock(side_effect=RuntimeError("blocked"))), \
+                patch.object(tiktok, "oembed_row", Mock(return_value={
+                    "title": "Demo video", "author": "Demo",
+                    "url": "https://www.tiktok.com/@demo/video/123456",
+                })):
+            targets = self.manager._discover_tiktok_keyword_videos(
+                "demo", {"max_items": 3, "proxies": []}
+            )
         self.assertEqual(len(targets), 1)
         self.assertEqual(targets[0]["prefill"]["title"], "Demo video")
-        self.manager._discover_tiktok_index_urls.assert_called_once()
+        index_urls.assert_called_once()
 
     def test_oembed_maps_preview_metadata(self):
         response = Mock()
@@ -116,12 +121,12 @@ class TikTokCrawlerTests(unittest.TestCase):
         self.assertEqual(row["thumbnail"], "https://img.example/thumb.jpg")
 
     def test_dispatches_all_four_modes(self):
-        self.manager._discover_tiktok_user = Mock(return_value=["user"])
-        self.manager._discover_tiktok_account_videos = Mock(return_value=["videos"])
-        self.manager._discover_tiktok_comments = Mock(return_value=["comments"])
-        self.manager._discover_tiktok_keyword_videos = Mock(return_value=["keyword"])
-        for mode in ("user", "videos", "comments", "keyword"):
-            self.assertEqual(self.manager._discover_tiktok_data("value", {"tiktok_mode": mode}), [mode])
+        with patch.object(tiktok, "user", Mock(return_value=["user"])), \
+                patch.object(tiktok, "account_videos", Mock(return_value=["videos"])), \
+                patch.object(tiktok, "comments", Mock(return_value=["comments"])), \
+                patch.object(tiktok, "keyword_videos", Mock(return_value=["keyword"])):
+            for mode in ("user", "videos", "comments", "keyword"):
+                self.assertEqual(self.manager._discover_tiktok_data("value", {"tiktok_mode": mode}), [mode])
 
     def test_douyin_profile_search_accepts_at_prefixed_nickname_and_common_ids(self):
         rows = profile_rows({"user_list": [{
@@ -165,6 +170,37 @@ class TikTokCrawlerTests(unittest.TestCase):
         self.assertEqual(rows[1]["likes"], 3)
         self.assertEqual(request.call_count, 2)
 
+    def test_keyword_search_reports_risk_control_instead_of_blaming_the_cookie(self):
+        """风控拦截时抖音返回 HTTP 200 + 空结果，只有 search_nil_info 说得清原因。"""
+        for nil_type, expected in (("verify_check", "人机验证"), ("antispam_check", "风控")):
+            with self.subTest(nil_type=nil_type):
+                with patch('app.douyin_profiles._request_payload', return_value={
+                    "data": [], "has_more": 0, "cursor": 0,
+                    "search_nil_info": {"search_nil_type": nil_type, "search_nil_item": nil_type},
+                }):
+                    with self.assertRaises(RuntimeError) as caught:
+                        search_awemes("人民日报", {"douyin_cookie": "sessionid=fine"}, 5)
+                self.assertIn(expected, str(caught.exception))
+                self.assertNotIn("Cookie", str(caught.exception))
+
+    def test_risk_control_on_a_later_page_keeps_the_rows_already_collected(self):
+        """翻到第二页才被拦时，第一页的结果不能丢。"""
+        pages = [
+            {"data": [{"aweme_info": {"aweme_id": "1", "desc": "first"}}], "has_more": 1, "cursor": 20},
+            {"data": [], "has_more": 0, "cursor": 0,
+             "search_nil_info": {"search_nil_type": "verify_check"}},
+        ]
+        with patch('app.douyin_profiles._request_payload', side_effect=pages):
+            rows = search_awemes("demo", {"douyin_cookie": "x=1"}, 9)
+        self.assertEqual([row["url"] for row in rows], ["https://www.douyin.com/video/1"])
+
+    def test_genuinely_empty_search_still_returns_no_rows_without_raising(self):
+        """真的没搜到和"被风控拦了"是两回事，不能一律报错。"""
+        with patch('app.douyin_profiles._request_payload', return_value={
+            "data": [], "has_more": 0, "cursor": 0, "search_nil_info": {},
+        }):
+            self.assertEqual(search_awemes("没有这个词", {"douyin_cookie": "x=1"}, 5), [])
+
     def test_douyin_account_videos_use_sec_uid_cursor_pages(self):
         with patch('app.douyin_profiles._request_payload', return_value={
             "aweme_list": [{"aweme_id": "3", "desc": "post", "author": {"nickname": "人民日报"}}],
@@ -203,9 +239,27 @@ class TikTokCrawlerTests(unittest.TestCase):
             enriched = enrich_profile(row, {"douyin_cookie": "sessionid=secret; msToken=token"})
         self.assertEqual((enriched["followers"], enriched["videos"], enriched["likes"]), (2, 4, 5))
         self.assertEqual(enriched["avatar"], "https://img/avatar")
-        self.assertIn("X-Bogus=", session.get.call_args.args[0])
+        self.assertIn("a_bogus=", session.get.call_args.args[0])
+        self.assertNotIn("X-Bogus=", session.get.call_args.args[0])
         self.assertNotIn("secret", session.get.call_args.args[0])
         session.close.assert_called_once()
+
+    def test_signed_url_falls_back_to_x_bogus_when_abogus_is_unavailable(self):
+        """没装 gmssl 时不能让整个采集崩掉 —— 退回旧签名，功能降级但可用。"""
+        url, ua = _signed_url("https://www.douyin.com/aweme/v1/web/x/", "aid=6383")
+        with patch("app.douyin_profiles.ABogus", None):
+            fallback, fallback_ua = _signed_url("https://www.douyin.com/aweme/v1/web/x/", "aid=6383")
+        self.assertIn("a_bogus=", url)
+        self.assertIn("X-Bogus=", fallback)
+        self.assertTrue(ua and fallback_ua)
+
+    def test_signed_url_falls_back_when_the_signer_raises(self):
+        """签名器抛异常时同样退回旧签名，而不是把异常抛给调用方。"""
+        with patch("app.douyin_profiles.BrowserFingerprintGenerator") as generator:
+            generator.generate_fingerprint.side_effect = RuntimeError("boom")
+            url, ua = _signed_url("https://www.douyin.com/aweme/v1/web/x/", "aid=6383")
+        self.assertIn("X-Bogus=", url)
+        self.assertTrue(ua)
 
     def test_douyin_profile_request_uses_browser_query_and_cookie_ms_token(self):
         cookies = _cookie_values("ttwid=abc; msToken=already-present; malformed")
@@ -221,6 +275,10 @@ class TikTokCrawlerTests(unittest.TestCase):
         manager.tasks, manager.task_secrets, manager.controls = {}, {}, {}
         manager.pool = Mock()
         manager._save = Mock()
+        # create 现在顺手把 cookie 落盘到任务目录（重启后仍要能用），裸实例得补一个可写的。
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        manager.data_dir = Path(temporary.name)
         task = manager.create({
             "source": "douyin", "tiktok_mode": "user", "keyword": "人民日报",
             "douyin_cookie": "sessionid=secret", "fields": [{"name": "url"}],
@@ -243,6 +301,70 @@ class TikTokCrawlerTests(unittest.TestCase):
         self.assertTrue(public["request"]["douyin_cookie_configured"])
         self.assertTrue(manager.delete("task"))
         self.assertNotIn("task", manager.task_secrets)
+
+
+class DouyinProfileBrowserTests(unittest.TestCase):
+    """用户搜索靠浏览器渲染：cookie 不带进上下文，页面就只剩导航空壳。"""
+
+    def discover(self, cookie, body="精选\n推荐\n直播\n登录\n综合\n用户", frames=()):
+        page = Mock()
+        # 未登录时的真实页面形态：没有任何用户链接，正文只有导航栏的「登录」入口。
+        page.locator.return_value.evaluate_all.return_value = []
+        page.locator.return_value.inner_text.return_value = body
+        page.frames = list(frames)
+        context = Mock()
+        context.new_page.return_value = page
+        engine = Mock()
+        engine.new_context.return_value = context
+        scope = Mock()
+        scope.__enter__ = Mock(return_value=engine)
+        scope.__exit__ = Mock(return_value=False)
+        with patch("app.douyin_profiles.browser_scope", Mock(return_value=scope)):
+            with self.assertRaises(RuntimeError) as caught:
+                discover_profiles("人民日报", {"douyin_cookie": cookie})
+        return context, str(caught.exception)
+
+    def test_cookie_is_injected_into_the_browser_context(self):
+        context, _ = self.discover("sessionid=secret; ttwid=xyz")
+        self.assertEqual(context.add_cookies.call_args.args[0], [
+            {"name": "sessionid", "value": "secret", "domain": ".douyin.com", "path": "/"},
+            {"name": "ttwid", "value": "xyz", "domain": ".douyin.com", "path": "/"},
+        ])
+
+    def test_context_without_cookie_is_left_untouched(self):
+        context, _ = self.discover("")
+        self.assertEqual(context.add_cookies.call_count, 0)
+
+    def test_login_wall_asks_for_a_cookie_instead_of_blaming_the_nickname(self):
+        _, message = self.discover("")
+        self.assertIn("请先填写抖音 Cookie", message)
+        self.assertNotIn("昵称不能直接当作用户 ID", message)
+
+    def test_unusable_cookie_is_reported_as_stale(self):
+        _, message = self.discover("sessionid=expired")
+        self.assertIn("Cookie 未能通过校验", message)
+
+    def test_slider_challenge_is_reported_as_verification_not_as_a_missing_account(self):
+        """滑块弹窗的文案里没有「验证码」，也没有「登录」，最容易漏判成「搜不到账号」。"""
+        _, message = self.discover("sessionid=fine",
+                                   "请完成下列验证后继续\n按住左边按钮拖动完成上方拼图\n刷新\n反馈")
+        self.assertIn("人机验证", message)
+        self.assertNotIn("昵称不能直接当作用户 ID", message)
+        self.assertNotIn("Cookie 未能通过校验", message)
+
+    def test_verification_wins_over_the_login_word_on_the_same_page(self):
+        """验证弹窗盖住页面时正文里也可能有「登录」，判断顺序不能反。"""
+        _, message = self.discover("sessionid=fine",
+                                   "精选\n推荐\n请完成下列验证后继续\n拖动完成上方拼图\n登录")
+        self.assertIn("人机验证", message)
+
+    def test_captcha_iframe_alone_is_enough(self):
+        """真实形态：滑块在 iframe 里，主文档正文被清空到只剩几个字符。"""
+        frame = Mock()
+        frame.url = "https://rmc.bytedance.com/verifycenter/captcha/v2?from=iframe&fp=verify_mukz"
+        _, message = self.discover("sessionid=fine", "\n  ", frames=[frame])
+        self.assertIn("人机验证", message)
+        self.assertNotIn("昵称不能直接当作用户 ID", message)
 
 
 if __name__ == "__main__":
