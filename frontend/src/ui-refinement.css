@@ -73,10 +73,10 @@ main.ui-shell.is-portal{max-width:none;padding:0;height:100dvh;overflow:hidden}
 .ui-shell input[type=checkbox],.ui-shell input[type=radio]{accent-color:var(--ui-primary)}
 
 /* Primary, secondary, download and destructive actions */
-.ui-shell :is(.primary,.wb-primary,.md-primary,.crawler-submit,.database-transfer-submit){
+.ui-shell :is(.primary,.wb-primary,.md-primary,.crawler-submit,.database-transfer-submit>button){
   min-height:calc(38px * var(--ui-scale));border:1px solid var(--ui-primary)!important;border-radius:var(--ui-control-radius)!important;background:var(--ui-primary)!important;color:#fff!important;box-shadow:0 4px 11px rgba(65,111,209,.16)!important;font-weight:650;text-decoration:none
 }
-.ui-shell :is(.primary,.wb-primary,.md-primary,.crawler-submit,.database-transfer-submit):hover:not(:disabled){background:var(--ui-primary-hover)!important;border-color:var(--ui-primary-hover)!important}
+.ui-shell :is(.primary,.wb-primary,.md-primary,.crawler-submit,.database-transfer-submit>button):hover:not(:disabled){background:var(--ui-primary-hover)!important;border-color:var(--ui-primary-hover)!important}
 .ui-shell :is(button,a):disabled{cursor:not-allowed!important;opacity:.46!important;box-shadow:none!important}
 .ui-shell :is(.refresh,.version-btn,.back-home),
 .ui-shell :is(.task-actions,.pdf-task-actions,.wb-task-actions,.wb-result,.metadata-toolbar,.metadata-preview-heading,.metadata-save) :is(button,a){

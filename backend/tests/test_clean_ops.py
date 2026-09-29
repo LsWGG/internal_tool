@@ -532,3 +532,31 @@ class ValidateOpsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ColumnFilterTests(unittest.TestCase):
+    def test_text_conditions_and_whole_row_removal(self):
+        rows = [['Alpha', 1], ['alphabet', 2], ['Beta', 3], [None, 4], ['', 5]]
+        for condition, value, expected in [('equals','alpha',[1]), ('contains','PH',[1,2]), ('starts_with','al',[1,2]), ('ends_with','TA',[3])]:
+            with self.subTest(condition=condition):
+                got, ctx = run([op('filter', condition=condition, value=value, ignore_case=True)], rows, ('f','id'))
+                self.assertEqual([row[1] for row in got], expected)
+                self.assertEqual(sum(counts(ctx, ':dropped').values()), 5-len(expected))
+                removed, _ = run([op('filter', condition=condition, value=value, ignore_case=True, filter_action='drop')], rows, ('f','id'))
+                self.assertEqual(len(removed), 5-len(expected))
+
+    def test_empty_enum_numeric_and_precision(self):
+        self.assertEqual(column([op('filter',condition='is_empty')],[None,'',' ',0]),[None,''])
+        self.assertEqual(column([op('filter',condition='not_empty')],[None,'',' ',0]),[' ',0])
+        self.assertEqual(column([op('filter',condition='in',filter_values=['A','2'],ignore_case=True)],['a',2,'b']),['a',2])
+        for condition, expected in [('gt',['9007199254740993']),('gte',['9007199254740992','9007199254740993']),('lt',['2']),('lte',['2','9007199254740992'])]:
+            self.assertEqual(column([op('filter',condition=condition,value='9007199254740992')],['2','9007199254740992','9007199254740993','bad',None,True,'NaN']),expected)
+
+    def test_order_missing_field_and_config_validation(self):
+        got, _ = run([op('trim'),op('filter',value='a'),op('filter',condition='gt',field='n',value='2')],[[' a ',3],['a',1],['b',4]],('f','n'))
+        self.assertEqual(got,[['a',3]])
+        got, ctx = run([op('filter',field='missing',value='a')],[['b']])
+        self.assertEqual(got,[['b']])
+        self.assertTrue(counts(ctx,':field_missing'))
+        for kwargs in [dict(field=''),dict(value=''),dict(condition='in'),dict(condition='gt',value='bad'),dict(condition='gt',value='Infinity')]:
+            with self.assertRaises(ValueError):
+                op('filter',**kwargs)

@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "links": [
+    {
+      "id": "ad258df7a6e2",
+      "name": "Hoppscotch",
+      "description": "Hoppscotch 是一款开源、轻量级的 API 开发生态系统，支持在浏览器中直接快速测试和调试 REST、GraphQL、WebSocket 等接口。",
+      "url": "https://hoppscotch.io/",
+      "category": "delivery",
+      "embeddable": false,
+      "frame_policy": "frame-ancestors 'self'"
+    }
+  ]
+}

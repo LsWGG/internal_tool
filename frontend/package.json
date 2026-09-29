@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:json": "node --test tests/json-tool.test.mjs"
   },
   "dependencies": {
     "@6over3/zeroperl-ts": "1.0.10",
@@ -24,9 +25,12 @@
     "docx-preview": "^0.4.0",
     "fflate": "^0.8.3",
     "heic-to": "^1.5.2",
+    "jsonpath-plus": "^11.1.0",
     "leaflet": "^1.9.4",
+    "lossless-json": "^4.3.1",
     "markdown-it": "^15.0.2",
-    "vue": "^3.5.13"
+    "vue": "^3.5.13",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.3",

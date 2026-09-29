@@ -35,3 +35,7 @@ google-re2>=1.1          # 用户正则的线性时间引擎，消除灾难性�
 httpx2>=2.13             # 仅为满足 starlette.testclient（testclient.py:33）；缺它整套后端测试无法导入
 charset-normalizer>=3.4  # 显式声明：此前只是 requests 的传递依赖，现在直接 import
 ruff>=0.16               # 「自定义 Python 函数」的格式化（clean_format.py 调 `python -m ruff`）
+
+# PDF 工具箱：后端 PDF 编辑、渲染及 Word 转换
+pymupdf>=1.26,<2
+pdf2docx>=0.5.8,<0.6

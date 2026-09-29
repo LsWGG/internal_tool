@@ -978,8 +978,8 @@ input[type='file']{position:relative;z-index:3;display:block;width:100%;pointer-
 .crawler-task-tabs span{font-size:var(--fs-11,11px);font-weight:700;white-space:nowrap}
 .crawler-task-tabs i{display:inline-block;min-width:0;height:auto;padding:0;color:#7b8da4;background:transparent;font-size:var(--fs-11,11px);font-style:normal;font-weight:650;line-height:1}
 .crawler-task-tabs button.active i{color:#416fc5;background:transparent}
-.crawler-task-refresh{min-width:58px;min-height:42px;padding:0 13px;border-radius:9px!important;font-weight:650;cursor:pointer}
-.crawler-task-refresh:hover{color:#315fc8!important;border-color:#aebfda!important;background:#f7faff!important}
+.crawler-task-refresh{min-width:58px;min-height:42px;padding:0 13px;border-radius:9px;font-weight:650;cursor:pointer}
+.crawler-task-refresh:hover{color:#315fc8;border-color:#aebfda;background:#f7faff}
 .crawler-tab-empty{margin-top:14px;padding:32px 20px}
 .crawler-download-toggle{display:flex!important;align-items:flex-start;gap:4px;margin:0!important;padding:9px 11px!important;border:1px solid #d7e3f0!important;border-radius:9px;background:#f7faff!important;color:#526b88!important;font-size:var(--fs-10,10px)!important}
 .crawler-download-toggle span{display:flex;align-items:center;gap:6px;white-space:nowrap}.crawler-download-toggle input{width:15px;height:15px;margin:0;accent-color:#416fc5}.crawler-download-toggle small{display:block;margin-top:2px;color:#8192a7;font-size:var(--fs-9,9px)!important;font-weight:400!important}

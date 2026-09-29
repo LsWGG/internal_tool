@@ -722,6 +722,50 @@ def _op_drop_null(table, op, ctx, slot):
     return table.drop_rows(keep)
 
 
+def _op_filter(table, op, ctx, slot):
+    found = _resolve(table, op, ctx, slot, op.field)
+    if found is None:
+        return table
+    normalize = lambda value: cell_text(value).casefold() if op.ignore_case else cell_text(value)
+    target = normalize(op.value)
+    choices = {normalize(value) for value in op.filter_values}
+    numeric = op.condition in ("gt", "gte", "lt", "lte")
+    threshold = Decimal(str(op.value)) if numeric else None
+
+    def matches(value):
+        if op.condition == "is_empty":
+            return is_empty(value)
+        if op.condition == "not_empty":
+            return not is_empty(value)
+        if is_empty(value):
+            return False
+        if numeric:
+            try:
+                number = Decimal(cell_text(value).strip())
+                if isinstance(value, bool) or not number.is_finite():
+                    return False
+                return {"gt": number > threshold, "gte": number >= threshold,
+                        "lt": number < threshold, "lte": number <= threshold}[op.condition]
+            except InvalidOperation:
+                return False
+        text = normalize(value)
+        if op.condition == "equals":
+            return text == target
+        if op.condition == "contains":
+            return target in text
+        if op.condition == "starts_with":
+            return text.startswith(target)
+        if op.condition == "ends_with":
+            return text.endswith(target)
+        return text in choices
+
+    matched = [matches(value) for value in table.data[found]]
+    keep = matched if op.filter_action == "keep" else [not flag for flag in matched]
+    ctx.count(f"{slot}:matched", sum(matched))
+    ctx.count(f"{slot}:dropped", keep.count(False))
+    return table.drop_rows(keep)
+
+
 def _op_dedupe(table, op, ctx, slot):
     """按 `subset`（默认整行）去重，保留首次出现。
 
@@ -777,6 +821,7 @@ _HANDLERS: dict[str, Callable[[Table, CleanOp, OpContext, str], Table]] = {
     "date_format": _op_date_format,
     "dedupe": _op_dedupe,
     "drop_null": _op_drop_null,
+    "filter": _op_filter,
     "concat": _op_concat,
     "slice": _op_slice,
     "number_format": _op_number_format,

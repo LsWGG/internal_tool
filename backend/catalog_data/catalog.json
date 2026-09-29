@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "order": [
+    "geo",
+    "database",
+    "documents",
+    "images",
+    "collection",
+    "delivery",
+    "external"
+  ],
+  "categories": {
+    "delivery": {
+      "name": "开发工具",
+      "description": "开发工作中常用到的工具"
+    }
+  },
+  "tools": {}
+}

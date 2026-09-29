@@ -16,6 +16,7 @@ export const toolGroups=[
     {id:'nebula',name:'NebulaGraph 数据迁移',tag:'图数据库',description:'迁移 Space、Tag、Edge，以及点和边数据。',keywords:'nebula 图数据库',icon:'graph'},
   ]},
   {id:'documents',name:'文档处理',english:'DOCUMENTS',description:'从网页、Markdown 和 Excel 制作可交付文档。',icon:'file',tools:[
+    {id:'pdf-toolbox',name:'PDF 工具箱',tag:'PDF 与 OCR',description:'合并拆分、页面整理、PDF/Word 转换与 DeepSeek 多模态 OCR。',keywords:'pdf 合并 拆分 word OCR DeepSeek 图片 转换',icon:'file'},
     {id:'pdf',name:'网页转 PDF',tag:'网页归档',description:'输入网址或上传 Excel，批量转换、预览和下载 PDF。',keywords:'pdf 网页 excel',icon:'file'},
     {id:'word-batch',name:'Word 批量生成',tag:'模板填充',description:'自定义 Word 模板，按 Excel 数据批量填入文字和图片。',keywords:'docx excel 模板 图片 批量 word',icon:'word'},
     {id:'md-word',name:'Markdown 转 Word',tag:'技术文档',description:'保留标题、表格与代码，将 Mermaid 图形嵌入 Word。',keywords:'md markdown mermaid docx word',icon:'word'},
@@ -31,6 +32,7 @@ export const toolGroups=[
     {id:'trending',name:'GitHub 每日热门榜单',tag:'技术趋势',description:'查看热门仓库、中文简介及近 7 天历史报告。',keywords:'github trending 热门 开源 历史 翻译',icon:'trend'},
   ]},
   {id:'delivery',name:'开发交付',english:'DEVELOPMENT & DELIVERY',description:'为离线部署准备软件安装包。',icon:'package',tools:[
+    {id:'json',name:'JSON 解析工具',tag:'解析与对比',description:'上传或粘贴 JSON，格式化、树形浏览、JSONPath 查询、格式转换与双栏差异对比。',keywords:'json jsonpath yaml csv jsonl 格式化 解析 对比 树形',icon:'data'},
     {id:'docker',name:'Docker 离线包',tag:'离线部署',description:'选择系统架构和版本，生成 Docker、Compose 与安装脚本。',keywords:'docker compose linux devops 离线',icon:'package'},
   ]},
 ]

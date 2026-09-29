@@ -16,11 +16,26 @@ export function installSelectMenus() {
     const {select, menu} = active
     if (!select.isConnected || select.disabled) return close()
     const rect = select.getBoundingClientRect()
-    const width = Math.min(Math.max(rect.width, 220), innerWidth - 24)
-    const below = innerHeight - rect.bottom - 12
-    const above = rect.top - 12
-    const height = Math.min(300, Math.max(80, below >= above ? below : above))
-    Object.assign(menu.style, {width: width+'px', maxHeight: height+'px', left: Math.max(12, Math.min(rect.left, innerWidth-width-12))+'px', top: (below >= above ? rect.bottom+6 : Math.max(12, rect.top-menu.offsetHeight-6))+'px'})
+    const viewport = window.visualViewport
+    const left = (viewport?.offsetLeft || 0) + 12
+    const top = (viewport?.offsetTop || 0) + 12
+    const right = left + (viewport?.width || innerWidth) - 24
+    const bottom = top + (viewport?.height || innerHeight) - 24
+    if (!rect.width || !rect.height || rect.bottom < top || rect.top > bottom) return close()
+    const width = Math.min(Math.max(rect.width, 220), Math.max(0, right-left))
+    // Set width before measuring wrapping, and height before measuring the
+    // upward offset. A single Object.assign used the old, unconstrained height.
+    Object.assign(menu.style, {width:width+'px', maxHeight:'300px'})
+    const naturalHeight = menu.getBoundingClientRect().height
+    const below = Math.max(0, bottom-rect.bottom-6)
+    const above = Math.max(0, rect.top-top-6)
+    const opensBelow = below >= naturalHeight || below >= above
+    menu.style.maxHeight = Math.min(300, opensBelow ? below : above)+'px'
+    const height = menu.getBoundingClientRect().height
+    Object.assign(menu.style, {
+      left:Math.max(left, Math.min(rect.left, right-width))+'px',
+      top:Math.max(top, Math.min(opensBelow ? rect.bottom+6 : rect.top-height-6, bottom-height))+'px',
+    })
   }
   function highlight(index) {
     if (!active) return
@@ -29,7 +44,14 @@ export function installSelectMenus() {
     const item = active.menu.querySelector(`[data-index="${index}"]`)
     if (item) {
       active.select.setAttribute('aria-activedescendant', item.id)
-      item.scrollIntoView({block:'nearest'})
+      // Only scroll the option list; scrollIntoView can also move the page
+      // or its nested panels and detach the popup from the triggering select.
+      const menuRect = active.menu.getBoundingClientRect()
+      const itemRect = item.getBoundingClientRect()
+      const top = menuRect.top + active.menu.clientTop
+      const bottom = top + active.menu.clientHeight
+      if (itemRect.top < top) active.menu.scrollTop += itemRect.top-top
+      else if (itemRect.bottom > bottom) active.menu.scrollTop += itemRect.bottom-bottom
     }
   }
   function choose(index) {
@@ -114,6 +136,8 @@ export function installSelectMenus() {
   },true)
   document.addEventListener('focusin', event => {if(active && event.target!==active.select && !active.menu.contains(event.target))close()})
   window.addEventListener('resize',close)
+  window.visualViewport?.addEventListener('resize',close)
+  window.visualViewport?.addEventListener('scroll',position)
   window.addEventListener('hashchange',close)
   document.addEventListener('scroll',event=>{if(active && !active.menu.contains(event.target))position()},true)
 }

@@ -1,0 +1,145 @@
+.tool-theme-toggle{float:right;position:relative;z-index:2;margin-bottom:12px}
+:root[data-theme=dark]{color-scheme:dark;--ui-surface:#222833;--ui-surface-subtle:#1b2029;--ui-text:#e9edf3;--ui-muted:#adb7c5;--ui-border:#526071;--ui-primary:#8eafff;--ui-primary-soft:#273650;--ui-success:#89d6ad;--ui-success-soft:#203b30;--ui-danger:#ffa5b5;--ui-danger-soft:#432631;--ui-warning:#f4d277;--ui-warning-soft:#403823;--pop-paper:#222833;--pop-soft:#1b2029;--pop-muted:#adb7c5;--pop-line:#526071;--workbench-ink:#e9edf3;--workbench-muted:#adb7c5;--workbench-line:#526071}
+html[data-theme=dark],html[data-theme=dark] body{background-color:#171b23!important;color:#e9edf3;background-image:none}
+html[data-theme=dark] :is(.ui-shell,.catalog-page,.settings-panel,.ai-native-panel){color:#e9edf3;background-color:#171b23}
+html[data-theme=dark] :is(.catalog-head){background-color:#203a43;color:#e9edf3}
+html[data-theme=dark] :is(.catalog-card,.panel,.task,.crawler-task,.wb-task,.settings-panel,.model-settings,.ai-native-panel,.ai-native-panel>header,.ai-native-panel>footer,.ai-native-markdown,.ai-agent-plan,.ai-agent-running,.ai-history>div,.ui-select-menu,.pdf-studio,.pdf-inline-list,.pdf-inline-row,.json-pane,.json-workbench,.clean-workspace,.database-studio,.wb-workspace,.metadata-workspace){background:#222833!important;color:#e9edf3!important;border-color:#526071!important;box-shadow:3px 3px #080b10!important}
+html[data-theme=dark] :is(.pdf-files,.pdf-tools,.pdf-empty,.pdf-options,.pdf-section-head,.pdf-preview-head,.pdf-inline-head,.ai-history,.ai-agent-trace,.settings-tabs,.settings-sidebar,.json-toolbar,.json-pane-header,.clean-step,.panel-title){background:#1b2029!important;color:#d9e3ed!important;border-color:#526071!important}
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.ai-native-panel,.ui-select-menu) :is(h1,h2,h3,h4,b,strong,label,dt,dd,small,p,.eyebrow,.hint,.empty,.catalog-group-number,.catalog-group-heading,.catalog-card-description,.catalog-identity p,.ai-native-markdown li){color:inherit}
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.ai-native-panel) :is(input,textarea,select){background-color:#171d27!important;color:#e9edf3!important;border-color:#586779!important;color-scheme:dark}
+html[data-theme=dark] :is(input,textarea)::placeholder{color:#94a2b4!important}
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.ai-native-panel,.ui-select-menu) button,html[data-theme=dark] :is(.task-actions,.pdf-task-actions) a{background-color:#2b3442!important;color:#e9edf3!important;border-color:#657186!important}
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.ai-native-panel,.ui-select-menu) button:hover:not(:disabled){background-color:#3b495c!important}
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.ai-native-panel) :is(button.active,button.primary,.primary-action,.pdf-run,.pdf-result-btn,.catalog-identity h1 span,.task-icon,.eyebrow,.catalog-card-icon){background:#ffe250!important;color:#202022!important;border-color:#202022!important}
+html[data-theme=dark] :is(.catalog-search>div,.ai-native-input,.ai-history>div.active){background:#23313d!important;border-color:#83d9e7!important}
+html[data-theme=dark] :is(.catalog-card small,.catalog-card p,.catalog-brand small,.catalog-group-heading p,.ai-native-panel small){color:#aebdcd}
+html[data-theme=dark] :is(.track,.progress-track){background:#3b4553!important}
+html[data-theme=dark] :is(.ai-native-markdown,.ui-shell) :is(pre,code){background-color:#19212d;color:#bfd5ff}
+html[data-theme=dark] :is(.ai-native-markdown,.ui-shell,.settings-panel) :is(th,td){border-color:#526071;background-color:#222833;color:#e9edf3}
+html[data-theme=dark] :is(.ui-select-menu [role=option]:hover,.ui-select-menu [role=option].focused){background:#344758;color:#fff}
+html[data-theme=dark] .ui-select-menu [aria-selected=true]{background:#ffe250;color:#202022}
+html[data-theme=dark] :is(.badge.completed,.badge.running,.badge.failed){color:#e9edf3!important;background:#304337!important}
+/* Document, image and map pixels retain their source colors. */
+html[data-theme=dark] :is(iframe,.docx-wrapper,.leaflet-container){color-scheme:light}
+@media(max-width:560px){.catalog-header-actions{gap:6px!important}.catalog-brand small{display:none}}
+html[data-theme=dark] .ui-shell>section{color:#e9edf3!important}
+html[data-theme=dark] .ui-shell>section>header :is(h1,p),html[data-theme=dark] :is(.queue-head h2,.catalog-group-heading,.catalog-card h3,.settings-panel label,.pdf-command span){color:#e9edf3!important}
+html[data-theme=dark] :is(.pdf-badge,.pdf-empty>span){background:#29434b;color:#b9eaf1;border-color:#617985}
+html[data-theme=dark] .catalog-identity h1{color:#e9edf3}
+
+/* Dark workbench surfaces: always pair background and foreground. */
+html[data-theme=dark] #app .ui-shell :is(.hint,.empty,.file-summary,.empty-custom-layers,.directory-picker,.wb-examples,.wb-guide,.mermaid-guide,.clean-file,.clean-guide,.clean-estimate,.clean-note,.clean-summary,.wb-tasks>.wb-muted){background:#273342!important;color:#c8d6e5!important;border-color:#566c83!important}
+html[data-theme=dark] #app .ui-shell :is(.base-layer-row,.sqlite-path-mode,.database-client-empty,.wb-file-control,.wb-preview-note,.metadata-features span,.database-transfer-guide,.database-import-dropzone,.sqlite-file-picker){background:#222c3a!important;color:#c8d6e5!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell :is(.map-toolbar,.wb-preview-head,.wb-step-head,.database-connection-top,.database-navigator-head,.database-grid-toolbar,.database-scope-bar,.es-help,.nebula-help,.image-convert-guide,.terminal-art,.pdf-help,.mermaid-preview,.gjb-preview){color:#e9edf3!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell :is(.source-zoom-limit,.layer-group-title,.map-layer-key,.propzone-level-picker>span,.filename-template-help>span,.wb-file-label,.image-guide-art>span,.image-convert-guide li,.image-convert-guide li span,.image-convert-guide>div,.progress>div,.crawler-task-heading p){color:#b9c9da!important}
+html[data-theme=dark] #app .ui-shell :is(.terminal-art pre,.es-help pre){background:#18222f!important;color:#c5d9f2!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell :is(.terminal-art>span,.wb-examples a){color:#a9d9ff!important}
+html[data-theme=dark] #app .ui-shell :is(.wb-file-control em,.wb-preview-head small){color:#b9c9da!important}
+html[data-theme=dark] #app .ui-shell .wb-file-control b{background:#83d9e7!important;color:#17232a!important}
+html[data-theme=dark] #app .ui-shell :is(.crawler-analyze,.crawler-finish,.crawler-discovery-box,.crawler-douyin-login,.crawler-options,.crawler-cron,.crawler-sql-config,.crawler-advanced,.crawler-picker){background:#25343f!important;color:#cedbe7!important;border-color:#526b7a!important}
+html[data-theme=dark] #app .ui-shell :is(.crawler-progress span,.crawler-advanced summary,.crawler-advanced summary small){color:#c8d6e5!important}
+html[data-theme=dark] #app .ui-shell :is(.crawler-progress i,.clean-step-pill i,.clean-step-no){background:#344456!important;color:#e9edf3!important;border-color:#718399!important}
+html[data-theme=dark] #app .ui-shell :is(.crawler-simple-fields label.active,.layer-catalog article.active,.local-layer-list article.active,.metadata-file.active){background:#234652!important;color:#d1f4fa!important;border-color:#83d9e7!important}
+html[data-theme=dark] #app .ui-shell :is(.clean-stage,.clean-config,.clean-step,.clean-rule,.clean-rule-card,.metadata-rule-card,.metadata-drafts,.metadata-tag-options){background:#222833!important;color:#e9edf3!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell .clean-step.open .clean-step-head{background:#34434c!important;color:#e9edf3!important}
+html[data-theme=dark] #app .ui-shell .clean-step-head b{color:#e9edf3!important}
+html[data-theme=dark] #app .ui-shell :is(.trending-view-tabs,.trending-categories) b{background:#36475b!important;color:#e9edf3!important}
+/* Status colors must stay semantically distinct and readable. */
+html[data-theme=dark] #app .ui-shell :is(.badge.running,.badge.queued,.wb-status){background:#243e58!important;color:#bbddff!important;border-color:#729ec8!important}
+html[data-theme=dark] #app .ui-shell :is(.badge.completed,.wb-status.completed){background:#203e32!important;color:#a9e7c5!important;border-color:#659c7d!important}
+html[data-theme=dark] #app .ui-shell :is(.badge.failed,.badge.cancelled,.wb-status.failed,.wb-status.partial,.pdf-error,.clean-error){background:#452b36!important;color:#ffc0cc!important;border-color:#bc7188!important}
+html[data-theme=dark] #app .ui-shell :is(.badge.paused,.warning){background:#443b23!important;color:#f6dfa0!important;border-color:#a18b4c!important}
+html[data-theme=dark] #app .ui-shell button:is(.danger,.md-danger){background:#452b36!important;color:#ffc0cc!important;border-color:#bc7188!important}
+html[data-theme=dark] #app .ui-shell button:disabled,html[data-theme=dark] .settings-panel button:disabled{opacity:1!important;background:#303744!important;color:#afbac9!important;border-color:#586271!important;box-shadow:none!important}
+/* Teleported settings and assistant do not live below #app. */
+html[data-theme=dark] .settings-panel :is(.settings-head,.settings-header){background:#26434d!important;color:#e9edf3!important}
+html[data-theme=dark] .settings-panel .model-settings{--model-line:#526071;color:#e9edf3!important}
+html[data-theme=dark] .settings-panel :is(.model-guidance,.model-footer,.settings-preview,.settings-item,.settings-form){background:#222e3c!important;color:#d1deeb!important;border-color:#526071!important}
+html[data-theme=dark] .settings-panel :is(.model-heading>span,.model-feedback,.model-settings small,.model-settings label>span){color:#b8c7d8!important}
+html[data-theme=dark] .settings-panel :is(.model-scopes button.active,.model-scopes button.active b,.model-scopes button.active small){background:#294c57!important;color:#d7f5fa!important}
+html[data-theme=dark] .settings-panel .model-scope-icon{background:#1b2d39!important;color:#c4edf3!important;border-color:#68909a!important}
+html[data-theme=dark] .settings-panel :is(.model-error,.model-warning){color:#ffc2b1!important}
+html[data-theme=dark] .settings-panel .model-notice{color:#a9e7c5!important}
+html[data-theme=dark] .ai-native-panel :is(.ai-agent-trace b,.ai-native-markdown h1,.ai-native-markdown h2,.ai-native-markdown h3,.ai-native-markdown strong,.ai-agent-plan dd){color:#e1ebf6!important}
+html[data-theme=dark] .ai-native-panel :is(.ai-agent-trace small,.ai-agent-plan dt,.ai-native-action-expired,.ai-history small){color:#b8c7d8!important}
+html[data-theme=dark] .ai-native-panel :is(.ai-native-welcome button i,.ai-native-markdown a,.ai-message-tools button){color:#b5ddff!important}
+html[data-theme=dark] .ai-native-panel .ai-native-message.user p{background:#294b66!important;color:#f0f7ff!important}
+html[data-theme=dark] .ai-native-panel .ai-native-message.error .ai-native-markdown{background:#452b36!important;color:#ffc0cc!important}
+html[data-theme=dark] #app .ui-shell .database-navigator-head b{color:#e9edf3!important}
+html[data-theme=dark] #app .ui-shell .source-icon.base{background:#33465a!important;color:#d4e6f7!important}
+html[data-theme=dark] #app .ui-shell .repo-card{background:#222833!important;color:#e9edf3!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell .repo-card :is(h3,p,small){color:#e0e9f3!important}
+html[data-theme=dark] #app .ui-shell :is(.repo-rank,.repo-meta,.repo-meta span,.repo-meta b){color:#b9ccdf!important}
+/* JSON controls, query output and inline diff all share the dark palette. */
+html[data-theme=dark] #app .json-page{--json-line:#526071;--json-muted:#b8c7d8}
+html[data-theme=dark] #app .json-page :is(.json-studio,.json-commandbar,.json-context,.json-pane-head,.json-source-foot,.json-status,.json-empty,.json-diff-report,.json-report-head,.json-local){background:#222e3c!important;color:#dce8f5!important;border-color:#526071!important}
+html[data-theme=dark] #app .json-page :is(.json-context-label,.json-diff-overview,.json-tree-value){color:#c8e4e9!important}
+html[data-theme=dark] #app .json-page :is(.json-symbol,.json-step){background:#83d9e7!important;color:#17232a!important}
+html[data-theme=dark] #app .json-page .json-tree-row:hover{background:#314153!important}
+html[data-theme=dark] #app .json-page .json-status.valid{color:#a9e7c5!important}
+html[data-theme=dark] #app .json-page :is(.json-error,.json-status.invalid){background:#452b36!important;color:#ffc0cc!important}
+html[data-theme=dark] #app .json-page .json-notice{background:#443b23!important;color:#f6dfa0!important}
+html[data-theme=dark] #app .json-page .cm-editor{background:#18222e!important;color:#e0e9f5!important}
+html[data-theme=dark] #app .json-page .cm-gutters{background:#222e3c!important;color:#b3c3d6!important;border-color:#526071!important}
+html[data-theme=dark] #app .json-page .cm-placeholder{color:#a5b6c9!important}
+html[data-theme=dark] #app .json-page .cm-cursor{border-left-color:#e9edf3!important}
+html[data-theme=dark] #app .json-page .cm-selectionBackground{background:#3b5875!important}
+html[data-theme=dark] #app .json-page :is(.json-diff-line.added,.json-diff-token.added){background:#214737!important;color:#c2f0d3!important}
+html[data-theme=dark] #app .json-page :is(.json-diff-line.removed,.json-diff-token.removed){background:#502d3b!important;color:#ffd0db!important}
+html[data-theme=dark] #app .json-page :is(.json-diff-line.changed,.json-diff-token.changed){background:#4b4021!important;color:#ffe9aa!important}
+html[data-theme=dark] #app .json-page .json-diff-marker.added{color:#a9e7c5!important}
+html[data-theme=dark] #app .json-page .json-diff-marker.removed{color:#ffc0cc!important}
+html[data-theme=dark] #app .json-page .json-diff-marker.changed{color:#f6dfa0!important}
+/* Hover never separates an accent button's dark text from its light fill. */
+html[data-theme=dark] #app .ui-shell :is(button.active,button.primary,.primary-action,.pdf-run,.pdf-result-btn,.json-primary):hover:not(:disabled){background:#ffe978!important;color:#202022!important}
+html[data-theme=dark] .settings-panel button.active:hover:not(:disabled){background:#ffe978!important;color:#202022!important}
+html[data-theme=dark] .settings-panel .model-scopes button.active:hover:not(:disabled){background:#345c68!important;color:#d7f5fa!important}
+html[data-theme=dark] #app .catalog-arrow{color:#b9dce9!important}
+html[data-theme=dark] .settings-panel #settings-title{color:#e9edf3!important}
+html[data-theme=dark] .ai-native-panel .ai-native-welcome>span{color:#b5ccff!important}
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.ai-native-panel) :is(button,a,input,select,textarea):focus-visible{outline:2px solid #83d9e7!important;outline-offset:3px}
+
+/* Expanded results and selected files are separate from the empty-page state. */
+html[data-theme=dark] #app .ui-shell :is(.pdf-inline-head b,.pdf-inline-row span,.pdf-preview-head b,.pdf-file-name b){color:#e9edf3!important}
+html[data-theme=dark] #app .ui-shell :is(.pdf-inline-head small,.pdf-inline-row small,.pdf-file-name small,.pdf-file-name>span){color:#b9c9da!important}
+html[data-theme=dark] #app .ui-shell :is(.pdf-inline-scroll,.pdf-inline-row,.pdf-toolbox-output){background:#222833!important;color:#e9edf3!important;border-color:#526071!important;box-shadow:none!important}
+html[data-theme=dark] #app .ui-shell :is(.pdf-inline-head,.pdf-preview-head){background:#1c2734!important;color:#e9edf3!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell :is(.pdf-inline-row button,.pdf-inline-row a,.pdf-preview-head button){background:#304256!important;color:#e9edf3!important;border-color:#71859c!important;box-shadow:2px 2px #10151d!important}
+html[data-theme=dark] #app .ui-shell :is(.pdf-inline-row button,.pdf-inline-row a,.pdf-preview-head button):hover{background:#3a596b!important;color:#e8faff!important}
+html[data-theme=dark] #app .ui-shell .pdf-file-list article{background:#222833!important;color:#dce8f5!important;border-color:#526071!important}
+html[data-theme=dark] #app .ui-shell .pdf-file-list article.selected{background:#24434d!important;box-shadow:inset 3px 0 #83d9e7!important}
+html[data-theme=dark] #app .ui-shell .pdf-file-list .pdf-file-name{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
+html[data-theme=dark] #app .ui-shell .pdf-file-list .pdf-file-name:hover{background:#305460!important}
+html[data-theme=dark] #app .ui-shell .pdf-files.dragging{background:#24434d!important;outline:2px dashed #83d9e7;outline-offset:-4px}
+/* One compact focus treatment instead of stacking light-theme rings. */
+html[data-theme=dark] :is(.ui-shell,.settings-panel,.confirm-card,.ai-native-panel) :is(input,textarea,select):focus{border-color:#83d9e7!important;outline:2px solid #83d9e7!important;outline-offset:1px!important;box-shadow:none!important}
+html[data-theme=dark] .ui-select-menu [role=option]{color:#e9edf3}
+html[data-theme=dark] .ui-select-menu [aria-selected=true]{color:#202022!important}
+/* Teleported confirmation, notifications and editing forms. */
+html[data-theme=dark] body .modal-mask{background:#080c14b8}
+html[data-theme=dark] body .modal-mask .confirm-card,html[data-theme=dark] body .toast-card{background:#222e3c!important;color:#e9edf3!important;border-color:#61748b!important;box-shadow:6px 6px #090d14!important}
+html[data-theme=dark] .confirm-card :is(h3,p),html[data-theme=dark] .toast-card :is(b,p){color:#e9edf3!important}
+html[data-theme=dark] .confirm-card small{color:#bacadc!important}
+html[data-theme=dark] .confirm-card .cancel-btn{background:#344256!important;color:#e9edf3!important;border:1px solid #71859c!important}
+html[data-theme=dark] .confirm-card :is(.confirm-symbol,.confirm-btn){background:#56303e!important;color:#ffd3de!important;border:1px solid #b9798d!important}
+html[data-theme=dark] .toast-card>button{color:#c1d2e4!important}
+html[data-theme=dark] .settings-panel :is(.settings-form,.settings-editor,.settings-preview,.settings-cat-editor,.settings-chip,.settings-cat-row,.settings-icon-grid){background:#222e3c!important;color:#e9edf3!important;border-color:#526071!important}
+html[data-theme=dark] .settings-panel :is(.settings-field-label,.settings-hint,.settings-chip-empty){color:#bdcedf!important}
+html[data-theme=dark] .settings-panel :is(.settings-cat-row.active,.settings-icon-choice.active){background:#31525e!important;color:#e3f7fb!important;border-color:#83d9e7!important}
+/* The confirmation message has its own light-mode surface. */
+html[data-theme=dark] body .modal-mask .confirm-card>p{background:#182431!important;color:#e9edf3!important;border-color:#526b83!important;border-radius:4px;box-shadow:none}
+html[data-theme=dark] .confirm-card .cancel-btn:hover{background:#40546b!important;color:#f1f6fc!important}
+html[data-theme=dark] .confirm-card .confirm-btn:hover{background:#713c4e!important;color:#ffe4eb!important}
+
+html[data-theme=dark] .settings-panel .model-scopes button.active :is(b,small){background:transparent!important}
+html[data-theme=dark] .settings-panel .model-settings{box-shadow:none!important}
+
+/* Waiting for a model is a status card: keep explicit child colors readable. */
+html[data-theme=dark] .ai-native-panel .ai-agent-running>span{color:#e9edf3!important}
+html[data-theme=dark] .ai-native-panel .ai-agent-running>small{color:#b8c7d8!important;border-color:#526071!important}
+html[data-theme=dark] .ai-native-panel .ai-agent-running>button{color:#e9edf3!important;border-color:#718398!important;background:#2b3442!important}
+
+/* Override the light-theme disabled controls without reducing text opacity. */
+html[data-theme=dark] body .ui-shell:not(.is-portal) :is(button,input,select,textarea):disabled{background-color:#252c36!important;color:#9ba8b8!important;border-color:#465363!important;opacity:1!important;box-shadow:none!important;cursor:not-allowed}
+html[data-theme=dark] body .map-page .panel-title{border-color:#526071!important}
+html[data-theme=dark] body .map-page .map-field-help{color:#aebdcd!important}

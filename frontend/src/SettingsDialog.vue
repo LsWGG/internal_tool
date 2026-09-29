@@ -1,6 +1,7 @@
 <script setup>
 import {computed,nextTick,onBeforeUnmount,onMounted,ref,watch} from 'vue'
 import axios from 'axios'
+import ModelSettings from './ModelSettings.vue'
 import {externalGroup} from './toolCatalog'
 import {firstChar,frameState,letterTone,linkGroupId,linkUrlError} from './linkTools'
 import {addCategory,categories,categoryName,moveCategory,moveTool,removeCategory,toolsIn,updateCategory} from './catalogState'
@@ -9,7 +10,7 @@ const props=defineProps({links:{type:Array,default:()=>[]},confirmAction:{type:F
 const emit=defineEmits(['close','saved'])
 
 // TAB 由数组驱动：「外链工具」仍是第一个、仍是默认打开的（它是这个弹窗本来的全部内容）。
-const tabs=[{id:'links',name:'外链工具'},{id:'cats',name:'工具分类'}]
+const tabs=[{id:'links',name:'外链工具'},{id:'cats',name:'工具分类'},{id:'models',name:'大模型配置'}]
 const active=ref('links')
 const panel=ref(),draft=ref(null),error=ref(''),note=ref(''),busy=ref(false),probing=ref('')
 
@@ -318,6 +319,7 @@ onBeforeUnmount(()=>document.removeEventListener('keydown',onKeydown))
               <button v-else class="settings-add" type="button" @click="edit(null)">＋ 添加外链工具</button>
             </template>
 
+            <ModelSettings v-else-if="active==='models'" />
             <div v-else class="settings-cats">
               <div class="settings-cat-pane">
                 <ul class="settings-cat-list" aria-label="分类列表" @dragover="listDragOver" @drop="listDrop">
@@ -357,7 +359,7 @@ onBeforeUnmount(()=>document.removeEventListener('keydown',onKeydown))
                   <span class="settings-field-label">这个分类里的工具</span>
                   <div v-if="countOf(selected.id)" class="settings-chips">
                     <span v-for="tool in toolsIn(selected.id)" :key="tool.id" class="settings-chip" :data-tool="tool.id" draggable="true" @dragstart="startToolDrag(tool.id,$event)" @dragend="endDrag">
-                      <span class="settings-chip-icon"><component :is="iconComponent" :name="tool.icon" /></span>{{tool.name}}
+                      <span class="settings-chip-icon" :style="letterTone(tool.id)"><component :is="iconComponent" :name="tool.icon" /></span>{{tool.name}}
                       <select v-if="moving===tool.id" class="settings-chip-select" :value="selected.id" @change="moveChip(tool.id,$event.target.value)" @blur="moving=''"><option v-for="item in categories" :key="item.id" :value="item.id">{{item.name}}</option></select>
                       <button v-else type="button" class="settings-chip-move" :aria-label="`把 ${tool.name} 移到别的分类`" @click="moving=tool.id">移动到…</button>
                     </span>
@@ -387,9 +389,9 @@ onBeforeUnmount(()=>document.removeEventListener('keydown',onKeydown))
    看起来就是「点了删除没反应」。 */
 .modal-mask{z-index:10900}
 /* 880 是两个 TAB 里宽的那个（左栏 210 + 右栏表单）需要的宽度；`min(…,100%)` 保证窄屏不溢出。 */
-.settings-panel{display:flex;flex-direction:column;width:min(880px,100%);max-height:calc(100dvh - 48px);border:1px solid #d9e2ef;border-radius:var(--ui-panel-radius,14px);background:var(--ui-surface,#fff);box-shadow:0 24px 64px #29415f38;outline:none;overflow:hidden}
+.settings-panel{display:flex;flex-direction:column;width:min(880px,100%);height:min(720px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);border:1px solid #d9e2ef;border-radius:var(--ui-panel-radius,14px);background:var(--ui-surface,#fff);box-shadow:0 24px 64px #29415f38;outline:none;overflow:hidden}
 .modal-enter-from .settings-panel,.modal-leave-to .settings-panel{transform:translateY(10px)}
-.settings-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 22px 16px;border-bottom:1px solid #e4eaf2}
+.settings-head{flex:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 22px 16px;border-bottom:1px solid #e4eaf2}
 .settings-head h2{margin:5px 0 0;color:#203653;font-size:var(--fs-18,18px);font-weight:700;line-height:1.4}
 .settings-head .eyebrow{color:#6685ad;font-size:var(--fs-10,10px);letter-spacing:1.8px}
 .settings-close{display:grid;place-items:center;flex:none;width:32px;height:32px;border:1px solid transparent;border-radius:9px;background:transparent;color:#7c8ca0;font-size:var(--fs-20,20px);line-height:1;cursor:pointer}
@@ -398,7 +400,7 @@ onBeforeUnmount(()=>document.removeEventListener('keydown',onKeydown))
 .settings-tabs button{padding:9px 13px;border:1px solid transparent;border-radius:9px 9px 0 0;background:transparent;color:#61748d;font-family:inherit;font-size:var(--fs-12,12px);font-weight:600;cursor:pointer}
 .settings-tabs button:hover{color:#4266b9;background:#f5f9ff}
 .settings-tabs button.active{border-color:#d4e0f7;border-bottom-color:transparent;background:#eaf0fd;color:#4266b9}
-.settings-body{flex:1;min-height:0;padding:20px 22px 22px;overflow:auto}
+.settings-body{flex:1;min-height:0;padding:20px 22px 22px;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain}
 .settings-intro{margin:0 0 16px;color:var(--ui-muted,#75869b);font-size:var(--fs-12,12px);line-height:1.8}
 .settings-error,.settings-note{margin:0 0 16px;padding:10px 12px;border:1px solid #e5b8bf;border-radius:9px;background:var(--ui-danger-soft,#fff2f3);color:#a4404f;font-size:var(--fs-12,12px);line-height:1.7;overflow-wrap:anywhere}
 .settings-note{border-color:#bcdccd;background:var(--ui-success-soft,#eaf7f2);color:#2c6f57}

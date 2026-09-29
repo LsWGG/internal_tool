@@ -214,6 +214,7 @@ const newColumns=computed(()=>fields.value.filter(isNewColumn).map(item=>item.de
 
 // ==================================================================== 清洗规则
 const OPS=[
+  {op:'filter',label:'按列过滤',field:true,filter:true},
   {op:'trim',label:'去首尾空白',field:true},
   {op:'lower',label:'转小写',field:true},
   {op:'upper',label:'转大写',field:true},
@@ -232,11 +233,15 @@ const OPS=[
   {op:'dedupe',label:'按列去重',fields:true,scope:true},
   {op:'drop_null',label:'删除空值行',fields:true},
 ]
+const FILTER_CONDITIONS=[{id:'equals',label:'等于'},{id:'contains',label:'包含'},{id:'starts_with',label:'开头是'},{id:'ends_with',label:'结尾是'},{id:'in',label:'属于候选值列表'},{id:'is_empty',label:'为空'},{id:'not_empty',label:'不为空'},{id:'gt',label:'数值大于'},{id:'gte',label:'数值大于等于'},{id:'lt',label:'数值小于'},{id:'lte',label:'数值小于等于'}]
+const filterNeedsValue=op=>!['in','is_empty','not_empty'].includes(op.condition)
+const filterIsText=op=>['equals','contains','starts_with','ends_with','in'].includes(op.condition)
 const ops=ref([])
 const opSpec=op=>OPS.find(item=>item.op===op)
 function ensureOp(op){
   // 目标类型不是每个算子都有，切换算子时旧值也可能不在新算子的候选里（`str` → 数值格式化的
   // `float/int`）。留着它就是一个渲染成空白、却是必填的下拉 —— 提交时才报错。
+  if(op.op==='filter'){op.condition ||= 'equals';op.filter_action ||= 'keep';op.filter_values ||= [];op.ignore_case ??= false}
   const spec=opSpec(op.op)
   if(spec?.valueKind&&!spec.valueKind.includes(op.value_kind))op.value_kind=spec.valueKind[0]
 }
@@ -255,6 +260,7 @@ function opSummary(op){
   if(['replace','regex_replace'].includes(op.op)&&op.pattern){
     parts.push(`「${op.pattern}」→「${op.replacement||''}」`)
   }
+  if(op.op==='filter')parts.push(`${op.filter_action==='drop'?'删除':'保留'}命中行 · ${FILTER_CONDITIONS.find(item=>item.id===op.condition)?.label||'等于'} ${op.condition==='in'?(op.filter_values||[]).join('、'):filterNeedsValue(op)?op.value||'（未填）':''}`)
   if(op.op==='fill_null')parts.push(`空值填「${op.value||''}」`)
   if(op.op==='cast')parts.push(`转成 ${op.value_kind}`)
   if(op.op==='date_format')parts.push(`格式 ${op.date_format||'（未填）'}`)
@@ -618,6 +624,7 @@ function opPayload(op){
   if(opSpec(op.op)?.fields&&op.fields?.length)payload.fields=op.fields
   if(op.op==='concat'&&op.dest)payload.dest=op.dest
   if(['replace','regex_replace'].includes(op.op)){payload.pattern=op.pattern||'';payload.replacement=op.replacement||''}
+  if(op.op==='filter'){payload.condition=op.condition||'equals';payload.filter_action=op.filter_action||'keep';payload.ignore_case=filterIsText(op)&&!!op.ignore_case;if(op.condition==='in')payload.filter_values=op.filter_values||[];else if(filterNeedsValue(op))payload.value=op.value}
   if(op.op==='fill_null')payload.value=op.value
   if(op.op==='ffill')payload.separator=''
   if(op.op==='cast')payload.value_kind=op.value_kind
@@ -1196,7 +1203,8 @@ onBeforeUnmount(()=>{listStream?.close();taskStream?.close()})
             <small class="clean-step-sum">{{stepSummary('ops')}}</small>
           </button>
           <div v-show="isOpen('ops')" class="clean-step-body">
-        <button type="button" :disabled="!fields.length" @click="addOp">添加规则</button>
+        <div class="clean-row"><button type="button" :disabled="!fields.length" @click="addOp">添加规则</button></div>
+        <p class="clean-hint">规则按添加顺序执行。按列过滤会保留或删除整行；多条过滤规则逐条作用于上一条的结果。</p>
         <div v-for="(op,index) in ops" :key="index" class="clean-op">
           <!-- 规则类型下拉必须是卡片里的第一个 select（浏览器套件用 `card.locator("select").first`
                定位它）。序号徽章是 <i>，不会插到它前面去。 -->
@@ -1214,6 +1222,16 @@ onBeforeUnmount(()=>{listStream?.close();taskStream?.close()})
                 <label v-for="name in identityFields" :key="name" class="clean-check" :class="{on:op.fields.includes(name)}"><input type="checkbox" :checked="op.fields.includes(name)" @change="toggleField(op.fields,name)"><span>{{name}}</span></label>
               </div>
             </div>
+          </div>
+          <div v-if="opSpec(op.op)?.filter" class="clean-filter-options">
+            <div class="clean-two">
+              <label>命中后操作<select v-model="op.filter_action"><option value="keep">仅保留命中行</option><option value="drop">删除命中行</option></select></label>
+              <label>过滤条件<select v-model="op.condition"><option v-for="condition in FILTER_CONDITIONS" :key="condition.id" :value="condition.id">{{condition.label}}</option></select></label>
+            </div>
+            <label v-if="filterNeedsValue(op)">比较值<input v-model="op.value" :placeholder="filterIsText(op)?'输入要匹配的文本':'输入数字，例如 100 或 3.5'"></label>
+            <label v-if="op.condition==='in'">候选值（每行一个）<textarea :value="(op.filter_values||[]).join('\n')" rows="3" placeholder="已完成&#10;已审核" @input="op.filter_values=$event.target.value.split('\n').filter(value=>value!=='')"></textarea></label>
+            <label v-if="filterIsText(op)" class="clean-check"><input type="checkbox" v-model="op.ignore_case"><span>忽略英文字母大小写</span></label>
+            <p class="clean-hint">{{['gt','gte','lt','lte'].includes(op.condition)?'按数值比较；空值和无法解析的数字视为未命中。':'空值指空单元格或空字符串；空白字符需先使用“去首尾空白”。文本按显示值精确匹配，不自动去除空格。'}} 可在后续验证步骤预览过滤结果。</p>
           </div>
           <div class="clean-two">
             <label v-if="opSpec(op.op)?.pattern">{{op.op==='regex_replace'?'正则':'查找'}}<input v-model="op.pattern" :placeholder="op.op==='regex_replace'?'\\\\d+':'待替换的子串'"></label>

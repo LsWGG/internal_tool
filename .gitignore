@@ -18,6 +18,14 @@ frontend/dist/
 # Runtime data, uploads and generated exports
 tmp/
 backend/*_data/
+
+# Version system settings; keep other runtime data ignored.
+!backend/catalog_data/
+backend/catalog_data/*
+!backend/catalog_data/catalog.json
+!backend/links_data/
+backend/links_data/*
+!backend/links_data/links.json
 backend/**/uploads/
 backend/**/outputs/
 backend/cache/
@@ -28,3 +36,6 @@ backend/data/
 .DS_Store
 .idea/
 .vscode/
+
+# Model credentials are local only
+backend/model_settings_data/

@@ -7,7 +7,7 @@ import sys
 import requests
 from fastapi import FastAPI, HTTPException, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from .docker_manager import DockerTaskManager
 from .gjb_manager import GJBTaskManager
@@ -19,6 +19,7 @@ from .shp_preview_manager import ShpPreviewManager
 from .tile_preview_manager import TilePreviewManager
 from .github_trending_manager import GitHubTrendingManager
 from .pdf_manager import PDFTaskManager
+from .pdf_toolbox import make_router as make_pdf_toolbox_router
 from .md_word_manager import MarkdownWordManager
 from .mermaid_manager import MermaidExportManager
 from .image_convert_manager import ImageConvertManager
@@ -30,12 +31,15 @@ from .word_batch_api import make_router as make_word_batch_router
 from .clean_api import make_router as make_clean_router
 from .links_api import make_router as make_links_router
 from .catalog_api import make_router as make_catalog_router
+from .model_settings import make_router as make_model_settings_router
 from .ai_native import chat as ai_chat, capabilities as ai_capabilities
 from .ai_capabilities import validate_action
 import json
 import zipfile
 
 app = FastAPI(title="地图数据下载服务", version="1.0.0")
+app.include_router(make_pdf_toolbox_router())
+app.include_router(make_model_settings_router())
 app.include_router(make_word_batch_router(Path(__file__).resolve().parents[1] / 'word_batch_data'))
 app.include_router(make_clean_router(Path(__file__).resolve().parents[1] / 'clean_data'))
 app.include_router(make_links_router(Path(__file__).resolve().parents[1] / 'links_data'))
@@ -86,9 +90,49 @@ def get_ai_capabilities():
 @app.post("/api/ai/chat")
 def post_ai_chat(payload: dict):
     try:
-        return ai_chat(payload)
+        return ai_chat(payload, executor=execute_ai_action)
     except ValueError as exc:
         raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/ai/chat/stream")
+def stream_ai_chat(payload: dict):
+    import json
+    import queue
+    import threading
+    events = queue.Queue()
+    stopped = threading.Event()
+
+    def emit(event):
+        if stopped.is_set():
+            raise ValueError('已停止等待')
+        events.put(event)
+
+    def work():
+        try:
+            result = ai_chat(payload, executor=execute_ai_action, emit=emit)
+            emit({'type': 'result', 'data': result})
+        except Exception as exc:
+            events.put({'type': 'error', 'message': str(exc) if isinstance(exc, ValueError) else '助手服务异常，请重试'})
+        finally:
+            events.put(None)
+
+    def stream():
+        threading.Thread(target=work, daemon=True).start()
+        try:
+            yield json.dumps({'type':'activity','label':'接收请求','detail':'正在检查可用能力'}, ensure_ascii=False) + '\n'
+            while True:
+                try:
+                    event = events.get(timeout=10)
+                except queue.Empty:
+                    yield '{"type":"heartbeat"}\n'
+                    continue
+                if event is None:
+                    break
+                yield json.dumps(event, ensure_ascii=False) + '\n'
+        finally:
+            stopped.set()
+    return StreamingResponse(stream(), media_type='application/x-ndjson', headers={'Cache-Control':'no-cache', 'X-Accel-Buffering':'no'})
 
 
 @app.post("/api/ai/actions/execute")

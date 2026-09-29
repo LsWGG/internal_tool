@@ -11,6 +11,7 @@ clean_engine 里。分开的理由是配置要能被完整地哈希（clean_conf
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 from typing import Any, Literal
@@ -194,7 +195,7 @@ class CleanOp(_Model):
 
     op: Literal[
         "trim", "lower", "upper", "nfkc", "replace", "regex_replace", "fill_null",
-        "ffill", "cast", "date_format", "dedupe", "drop_null", "concat", "slice", "number_format",
+        "ffill", "cast", "date_format", "dedupe", "drop_null", "concat", "slice", "number_format", "filter",
     ]
     field: str = ""
     fields: list[str] = Field(default_factory=list)
@@ -213,6 +214,10 @@ class CleanOp(_Model):
     # number_format：小数点后位数（None = int 取 0、float 保留原样）与千分位分隔
     decimals: int | None = Field(default=None, ge=0, le=12)
     thousands: bool = False
+    condition: Literal["equals", "contains", "starts_with", "ends_with", "in", "is_empty", "not_empty", "gt", "gte", "lt", "lte"] = "equals"
+    filter_action: Literal["keep", "drop"] = "keep"
+    filter_values: list[str] = Field(default_factory=list)
+    ignore_case: bool = False
     # dedupe
     keep: Literal["first"] = "first"     # 只有 first 是单遍可算的
     subset: list[str] = Field(default_factory=list)
@@ -226,6 +231,19 @@ class CleanOp(_Model):
         }
         if self.op in needs_field and not self.field:
             raise ValueError(f"{self.op} 算子必须指定 field")
+        if self.op == "filter":
+            if not self.field:
+                raise ValueError("按列过滤必须选择字段")
+            if self.condition == "in" and not self.filter_values:
+                raise ValueError("按列过滤必须填写至少一个候选值")
+            if self.condition not in ("in", "is_empty", "not_empty") and (self.value is None or str(self.value) == ""):
+                raise ValueError("按列过滤必须填写比较值")
+            if self.condition in ("gt", "gte", "lt", "lte"):
+                try:
+                    if isinstance(self.value, bool) or not Decimal(str(self.value)).is_finite():
+                        raise ValueError("数值过滤必须填写有限数字")
+                except InvalidOperation as exc:
+                    raise ValueError("数值过滤必须填写有效数字") from exc
         if self.op == "regex_replace" and not self.pattern:
             raise ValueError("regex_replace 必须提供 pattern")
         if self.op == "replace" and not self.pattern:

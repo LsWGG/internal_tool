@@ -125,18 +125,35 @@ CAPABILITIES = {
         "id": "trending", "name": "GitHub 每日热门榜单", "description": "查看当天或近七天 GitHub 热门报告。",
         "actions": {"navigate": {"confirmation": "none"}, "query": {"schema": _object({"date": {"type": "string", "maxLength": 10}}), "confirmation": "none", "adapter": "trending.query", "label": "查看热门榜单"}},
     },
+    "pdf-toolbox": _manual("pdf-toolbox", "PDF 工具箱", "合并、拆分、提取、旋转、压缩、水印、PDF 与 Word/图片互转、文本提取和多模态 OCR；需要在页面上传文件。", uploads=True),
+    "json": _manual("json", "JSON 解析工具", "粘贴或上传 JSON，格式化、树形和表格视图、JSONPath 查询、格式转换及双栏差异对比。"),
     "docker": _manual("docker", "Docker 离线包", "生成 Docker 与 Compose 离线安装包。"),
 }
+
+
+JSON_PARAMETERS = {'format': {'type':'string','enum':['yaml','csv','jsonl','minify','json']}, 'text': {'type':'string','maxLength':20000}, 'mode': {'type':'string','enum':['formatted','tree','table','query','convert','diff']}, 'path': {'type':'string','maxLength':500}, 'comparison': {'type':'string','maxLength':20000}}
+CAPABILITIES['json']['actions']['configure'] = {'schema':_object(JSON_PARAMETERS), 'confirmation':'none'}
+GENERIC_PARAMETER_PROPERTIES.update(JSON_PARAMETERS)
+
+PAGE_PARAMETERS = _object({
+    'revision': {'type':'string','minLength':1},
+    'control_id': {'type':'string','minLength':1},
+    'mode': {'type':'string','enum':['fill','click']},
+    'value': {'type':'string','maxLength':20000},
+}, ('revision','control_id','mode'))
+for capability in CAPABILITIES.values():
+    capability['actions']['page'] = {'schema': PAGE_PARAMETERS, 'confirmation':'required', 'label':'确认页面操作'}
 
 
 GENERIC_FUNCTIONS = [
     {"type": "function", "function": {"name": "respond_to_user", "description": "无需打开工具、配置或执行操作时，直接回答用户的问题。", "parameters": _object({"answer": {"type": "string", "minLength": 1, "maxLength": 12000}, "suggestions": {"type": "array", "items": {"type": "string"}, "maxItems": 3}}, ("answer",))}},
     {"type": "function", "function": {"name": "navigate_tool", "description": "打开最适合用户需求的门户工具页面。仅在用户要求进入页面、需要上传文件或补充配置时使用。", "parameters": _object({"tool_id": {"type": "string", "enum": list(CAPABILITIES)}} , ("tool_id",))}},
-    {"type": "function", "function": {"name": "configure_tool", "description": "将明确的配置值填入工具页面；目前仅支持地图、网页转 PDF 和网页采集配置。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
+    {"type": "function", "function": {"name": "configure_tool", "description": "将明确的配置值填入工具页面；支持地图、网页转 PDF、网页采集和 JSON 工具配置。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler", "json"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
     {"type": "function", "function": {"name": "create_task", "description": "用户明确要求执行地图下载、网页转 PDF 或公开数据采集时使用。采集任务需要选择 crawler 并提供 source、目标 URL/关键词、数量和保存格式；系统会要求用户确认。榜单查看等只读请求绝不能使用。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
     {"type": "function", "function": {"name": "control_task", "description": "暂停、继续、重试或删除地图/PDF 已有任务。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf"]}, "task_id": {"type": "string"}, "action": {"type": "string", "enum": ["pause", "resume", "retry", "delete"]}}, ("tool_id", "task_id", "action"))}},
     {"type": "function", "function": {"name": "query_tool", "description": "读取工具的真实数据或任务状态。用户询问榜单、任务、结果、进度或当前数据时使用；没有任务 ID 时返回最近记录。", "parameters": _object({"tool_id": {"type": "string", "enum": list(CAPABILITIES)}, "parameters": _object({"task_id": {"type": "string", "minLength": 8}, "date": {"type": "string", "maxLength": 10}})}, ("tool_id",))}},
     {"type": "function", "function": {"name": "export_result", "description": "获取地图/PDF 已完成任务的下载地址。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf"]}, "task_id": {"type": "string"}}, ("tool_id", "task_id"))}},
+    {"type":"function","function":{"name":"operate_page","description":"操作当前工具页面真实控件。只允许使用页面快照中的 revision 与 control_id，每次填写一个字段或点击一个按钮；缺少文件须让用户上传。不得猜测控件 ID。","parameters":_object({'tool_id':{'type':'string','enum':list(CAPABILITIES)},'parameters':PAGE_PARAMETERS},('tool_id','parameters'))}},
 ]
 
 

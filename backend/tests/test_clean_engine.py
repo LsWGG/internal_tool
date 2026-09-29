@@ -827,3 +827,20 @@ class ReportFromStateTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ColumnFilterIntegrationTests(Base):
+    def test_filters_rows_in_pipeline_and_reports_counts(self):
+        self.rows_csv('filter.csv',['name','status','amount'],[
+            ['Alice','done',120],['Bob','pending',20],['Carol','done',50],['Dave','done',200]])
+        config=self.config([{'dest':name,'source':name} for name in ['name','status','amount']],
+            ops=[{'op':'filter','field':'status','condition':'equals','value':'done'},
+                 {'op':'filter','field':'amount','condition':'gte','value':'100'}])
+        _,store=self.run_engine(config)
+        contents='\n'.join(value.decode('utf-8-sig') for value in self.outputs(store).values())
+        self.assertIn('Alice',contents)
+        self.assertIn('Dave',contents)
+        self.assertNotIn('Bob',contents)
+        self.assertNotIn('Carol',contents)
+        self.assertEqual(list(self.counts(store).values()),[(4,2,2)])
+        from app.clean_report import _op_target
+        self.assertIn('保留命中行',_op_target(config.ops[0]))

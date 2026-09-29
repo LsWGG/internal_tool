@@ -14,18 +14,13 @@ export function firstChar(name){
   return /[a-z]/.test(char)?char.toUpperCase():char
 }
 
-/** 「符合项目主题的 LOGO」= 名称首字 + 品牌蓝附近的底色。
- *
- * 色相由 id 稳定散在 205–265°（设计系统那套浅蓝渐变所在的区间），同一个工具每次算出来
- * 都一样，一组卡片摆在一起仍是一家人。返回的样式里同时给 background 和 color，
- * 所以它写在元素的行内样式上就能盖掉 .catalog-tool-icon 的默认蓝。
- */
+/** Stable pop-art colour shared by catalog cards, settings and external tool headers. */
 export function letterTone(id){
   const text=String(id??'')
   let hash=0
   for(let index=0;index<text.length;index+=1)hash=(hash*31+text.charCodeAt(index))>>>0
-  const hue=205+(hash%61)
-  return {background:`linear-gradient(160deg,hsl(${hue} 72% 97%),hsl(${hue} 68% 93%))`,color:`hsl(${hue} 52% 46%)`}
+  const color=['#ffe250','#ff93ba','#83d9e7'][hash%3]
+  return {'--card-color':color,background:color,color:'#202022'}
 }
 
 /** 卡片副标题用主机名，比整条地址短，也比「外链工具」四个字更能说明这是什么。 */

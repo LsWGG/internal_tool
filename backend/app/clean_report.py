@@ -519,6 +519,7 @@ _OP_LABELS = {
     "date_format": "日期格式化",
     "dedupe": "去重",
     "drop_null": "删除空值行",
+    "filter": "按列过滤",
     "concat": "拼接列",
     "slice": "截取子串",
     "number_format": "数字格式化",
@@ -530,6 +531,10 @@ def _op_label(op: Any) -> str:
 
 
 def _op_target(op: Any) -> str:
+    if op.op == "filter":
+        names = {"equals":"等于", "contains":"包含", "starts_with":"开头是", "ends_with":"结尾是", "in":"属于列表", "is_empty":"为空", "not_empty":"不为空", "gt":"大于", "gte":"大于等于", "lt":"小于", "lte":"小于等于"}
+        value = "、".join(op.filter_values) if op.condition == "in" else ("" if op.condition in ("is_empty", "not_empty") else str(op.value))
+        return f"{op.field} · {'保留' if op.filter_action == 'keep' else '删除'}命中行 · {names[op.condition]} {value}" + (" · 忽略大小写" if op.ignore_case else "")
     if op.op == "concat":
         return f"{'+'.join(op.fields)} → {op.dest}"
     if op.op == "dedupe":
