@@ -48,12 +48,14 @@ function resetEditor(template='blank'){
 }
 function selectProject(project){selectedId.value=project.id;creating.value=false;editor.value={name:project.name,content:project.content};logs.value='';logService.value=''}
 function useTemplate(event){const key=event.target.value;resetEditor(key)}
-async function save(){
+async function save(startAfter=false){
   const wasCreating=creating.value
   busy.value=true
   try{
     const response=creating.value?await axios.post('/api/compose/projects',editor.value):await axios.put(`/api/compose/projects/${selectedId.value}`,editor.value)
-    await refresh();selectProject(response.data);notify(wasCreating?'Compose 项目已保存。':'compose.yaml 已更新。','success')
+    await refresh();selectProject(response.data)
+    if(startAfter&&status.value.available){await action('start');return}
+    notify(wasCreating?'Compose 项目已保存。':'compose.yaml 已更新。','success')
   }catch(error){notify(errorMessage(error),'error')}finally{busy.value=false}
 }
 async function importFile(event){
@@ -90,22 +92,22 @@ onMounted(async()=>{resetEditor();await refresh()})
 
     <div class="compose-layout">
       <aside class="compose-library">
-        <div class="compose-library-head"><b>服务收藏</b><button type="button" @click="resetEditor()">＋ 新建</button></div>
+        <div class="compose-library-head"><div><b>服务收藏</b><small>{{projects.length}} 个已保存项目</small></div><button type="button" @click="resetEditor()">＋ 新建</button></div>
         <div class="compose-import"><button type="button" @click="fileInput?.click()">导入 compose 文件</button><input ref="fileInput" type="file" accept=".yml,.yaml" @change="importFile"></div>
         <div v-if="!projects.length" class="compose-empty">还没有已保存的 compose 文件。</div>
         <button v-for="project in projects" :key="project.id" class="compose-project" :class="{active:project.id===selectedId}" @click="selectProject(project)"><span><b>{{project.name}}</b><small>{{project.services?.filter(item=>serviceClass(item.state)==='running').length||0}} 个运行中 · {{date(project.updated_at)}}</small></span><i>{{project.services?.length||0}}</i></button>
       </aside>
 
       <main class="compose-editor">
-        <div class="compose-editor-head"><div><b>{{creating?'创建 Compose 项目':'编辑 Compose 项目'}}</b><small>{{creating?'可从模板开始，也可粘贴已有 YAML。':'修改后保存，再启动或重启服务。'}}</small></div><label v-if="creating">快速模板<select @change="useTemplate"><option value="blank">Nginx 示例</option><option value="database">PostgreSQL</option><option value="redis">Redis</option></select></label></div>
+        <div class="compose-editor-head"><div><span class="compose-step">1</span><b>{{creating?'创建 Compose 项目':'编辑 Compose 项目'}}</b><small>{{creating?'选择模板、粘贴 YAML 或从左侧导入。':'保存修改后，可直接在右侧管理服务。'}}</small></div><label v-if="creating">快速模板<select @change="useTemplate"><option value="blank">Nginx 示例</option><option value="database">PostgreSQL</option><option value="redis">Redis</option></select></label></div>
         <label class="compose-name">项目名称<input v-model.trim="editor.name" placeholder="例如：接口联调环境"></label>
         <label class="compose-source"><span>compose.yaml</span><textarea v-model="editor.content" spellcheck="false" placeholder="services:\n  app:\n    image: nginx:alpine"></textarea></label>
-        <div class="compose-editor-actions"><button type="button" class="primary" :disabled="busy" @click="save">{{busy?'处理中…':creating?'保存项目':'保存修改'}}</button><button v-if="selected" type="button" class="danger" :disabled="busy" @click="remove">删除记录</button></div>
+        <div class="compose-editor-actions"><button type="button" class="primary" :disabled="busy" @click="save">{{busy?'处理中…':creating?'保存项目':'保存修改'}}</button><button type="button" class="start-now" :disabled="busy||!status.available" @click="save(true)">保存并启动</button><button v-if="selected" type="button" class="danger" :disabled="busy" @click="remove">删除记录</button></div>
       </main>
 
       <aside class="compose-runtime">
-        <div class="compose-runtime-head"><div><b>运行状态</b><small>{{selected?selected.name:'请先选择或保存一个项目'}}</small></div><div class="compose-actions"><button :disabled="!selected||busy||!status.available" @click="action('start')">启动</button><button :disabled="!selected||busy||!status.available" @click="action('restart')">重启</button><button :disabled="!selected||busy||!status.available" @click="action('stop')">停止</button><button class="danger" :disabled="!selected||busy||!status.available" @click="action('down')">移除</button></div></div>
-        <div v-if="selected?.services?.length" class="compose-services"><article v-for="service in selected.services" :key="service.name"><span class="service-dot" :class="serviceClass(service.state)"></span><div><b>{{service.name}}</b><small>{{service.status||service.state}}</small></div><em>{{service.state}}</em></article></div><div v-else class="compose-empty runtime">服务启动后会在此显示容器状态。</div>
+        <div class="compose-runtime-head"><div><span class="compose-step">2</span><b>运行与日志</b><small>{{selected?selected.name:'保存项目后即可启动服务'}}</small></div><div class="compose-actions"><button :disabled="!selected||busy||!status.available" @click="action('start')">启动</button><button :disabled="!selected||busy||!status.available" @click="action('restart')">重启</button><button :disabled="!selected||busy||!status.available" @click="action('stop')">停止</button><button class="danger" :disabled="!selected||busy||!status.available" @click="action('down')">移除</button></div></div>
+        <div v-if="selected?.services?.length" class="compose-services"><article v-for="service in selected.services" :key="service.name"><span class="service-dot" :class="serviceClass(service.state)"></span><div><b>{{service.name}}</b><small>{{service.status||service.state}}</small></div><em>{{service.state}}</em></article></div><div v-else class="compose-empty runtime">保存后点击“保存并启动”，容器状态会显示在这里。</div>
         <div class="compose-logs-head"><b>日志</b><select v-model="logService"><option value="">全部服务</option><option v-for="service in selected?.services||[]" :key="service.name" :value="service.name">{{service.name}}</option></select><button :disabled="!selected||busy||!status.available" @click="loadLogs">查看日志</button></div>
         <pre class="compose-logs">{{logs||'选择服务后点击“查看日志”。'}}</pre>
       </aside>
@@ -120,4 +122,5 @@ onMounted(async()=>{resetEditor();await refresh()})
 /* `main` has a generic desktop cap elsewhere in the app. This workbench's editor
    is a grid cell, so explicitly opt it out to prevent the narrow centered column. */
 .compose-layout{grid-template-columns:minmax(260px,.7fr) minmax(520px,1.35fr) minmax(430px,1.05fr);min-height:clamp(720px,calc(100dvh - 235px),1320px)}.compose-editor{width:100%;max-width:none!important;margin:0!important;padding:22px!important;box-sizing:border-box}.compose-library,.compose-runtime{padding:22px}.compose-source textarea{min-height:520px}.compose-runtime{gap:20px}.compose-empty.runtime{margin:0;padding:28px 16px;border:1px dashed var(--ui-border);background:var(--ui-surface)}@media(max-width:1100px){.compose-layout{grid-template-columns:minmax(220px,.72fr) 1.3fr}.compose-editor{padding:18px!important}.compose-runtime{padding:18px}}@media(max-width:700px){.compose-layout{min-height:0}.compose-source textarea{min-height:360px}}
+.compose-layout{grid-template-columns:300px minmax(560px,1.45fr) minmax(440px,1fr)}.compose-library-head>div{display:flex;flex-direction:column;gap:2px}.compose-library-head small{font-size:var(--fs-9);font-weight:400;color:var(--ui-muted)}.compose-step{display:inline-grid;width:19px;height:19px;margin-right:6px;place-items:center;border:1px solid var(--pop-ink,#252526);border-radius:50%;background:var(--pop-yellow,#ffe250);color:var(--pop-ink,#252526);font-size:var(--fs-10);font-weight:800;vertical-align:1px}.compose-editor-head>div:first-child,.compose-runtime-head>div:first-child{min-width:0}.compose-editor-head>div:first-child>b,.compose-runtime-head>div:first-child>b{font-size:var(--fs-15)}.compose-editor-actions{justify-content:flex-start;border-top:1px solid var(--ui-border);padding-top:14px}.compose-editor-actions .start-now{border-color:#356c76;background:#e1f7fa;color:#173940}.compose-editor-actions .start-now:hover:not(:disabled){background:#c9eff4}.compose-runtime-head{padding-bottom:14px;border-bottom:1px solid var(--ui-border)}.compose-actions{gap:6px}.compose-actions button{min-height:34px}.compose-logs-head{padding-top:12px;border-top:1px solid var(--ui-border)}@media(max-width:1100px){.compose-layout{grid-template-columns:minmax(220px,.72fr) 1.3fr}.compose-runtime{grid-column:1/-1}}@media(max-width:700px){.compose-layout{display:block}.compose-library{max-height:330px}.compose-editor-actions{flex-wrap:wrap}.compose-editor-actions button{flex:1;min-width:120px}}
 </style>
