@@ -390,7 +390,21 @@ function switchMapType(){
 }
 watch(()=>[mapCategory.value,form.tile_source],switchMapType)
 
-function go(target){view.value=target;location.hash=target;window.scrollTo({top:0,left:0,behavior:'instant'});if(target==='map')nextTick(()=>map.value?.invalidateSize());if(target==='shp')nextTick(initShpMap);if(target==='propzone')nextTick(initPropzoneMap);if(target==='trending')loadTrendingDates();if(target==='md-word')loadMdWordTasks();if(target==='image-convert')loadImageTasks();if(target==='database')loadDatabaseTasks();if(target==='propzone')loadPropzoneTasks();if(target==='crawler')loadCrawlerFields()}
+async function go(target){
+  // DBX is a complete browser IDE. Opening it in this same tab gives it the
+  // browser's full viewport and avoids shrinking an independent application
+  // inside an iframe on high-density displays.
+  if(target==='dbx'){
+    try{
+      const dbx=(await axios.get('/api/dbx/status')).data
+      if(dbx.running){window.location.assign(dbx.url);return}
+      notify(dbx.error||'DBX 正在启动，请稍后再试。','info')
+      view.value='dbx';location.hash='dbx'
+      return
+    }catch{notify('无法读取 DBX 启动状态。','error');return}
+  }
+  view.value=target;location.hash=target;window.scrollTo({top:0,left:0,behavior:'instant'});if(target==='map')nextTick(()=>map.value?.invalidateSize());if(target==='shp')nextTick(initShpMap);if(target==='propzone')nextTick(initPropzoneMap);if(target==='trending')loadTrendingDates();if(target==='md-word')loadMdWordTasks();if(target==='image-convert')loadImageTasks();if(target==='database')loadDatabaseTasks();if(target==='propzone')loadPropzoneTasks();if(target==='crawler')loadCrawlerFields()
+}
 function syncHash(){view.value=location.hash.slice(1)||'home';window.scrollTo({top:0,left:0,behavior:'instant'});if(view.value==='map')nextTick(()=>map.value?.invalidateSize());if(view.value==='shp')nextTick(initShpMap);if(view.value==='propzone')nextTick(initPropzoneMap);if(view.value==='trending')loadTrendingDates();if(view.value==='md-word')loadMdWordTasks();if(view.value==='image-convert')loadImageTasks();if(view.value==='database')loadDatabaseTasks();if(view.value==='propzone')loadPropzoneTasks();if(view.value==='crawler')loadCrawlerFields()}
 // Leaflet caches its container size, and nothing here ever told it the container changed, so a
 // window resize used to leave every map with grey strips until you navigated away and back.
