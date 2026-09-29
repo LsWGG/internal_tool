@@ -109,6 +109,12 @@ def compose_status():
     return compose_manager.status()
 
 
+@app.post("/api/compose/access")
+def configure_compose_access(payload: dict):
+    # Passwords are held in memory only by ComposeManager and are never saved.
+    return compose_manager.configure_access(bool(payload.get("use_sudo")), payload.get("sudo_password", ""))
+
+
 @app.get("/api/compose/projects")
 def list_compose_projects():
     return compose_manager.list()

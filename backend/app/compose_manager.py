@@ -19,6 +19,10 @@ class ComposeManager:
         self.projects_dir = root / "projects"
         self.state_file = root / "projects.json"
         self.lock = threading.RLock()
+        # Deliberately memory-only: a local sudo password must never be written
+        # to compose files, metadata, logs, or the project repository.
+        self.use_sudo = False
+        self.sudo_password = ""
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         try:
             self.projects = json.loads(self.state_file.read_text("utf-8"))
@@ -50,9 +54,31 @@ class ComposeManager:
             raise ValueError("compose 文件必须包含 services: 配置")
         return value
 
+    def configure_access(self, use_sudo: bool, password: str = "") -> dict:
+        with self.lock:
+            self.use_sudo = bool(use_sudo)
+            self.sudo_password = password if self.use_sudo else ""
+        return self.access()
+
+    def access(self) -> dict:
+        with self.lock:
+            return {"use_sudo": self.use_sudo, "password_set": bool(self.sudo_password)}
+
+    def _run(self, command: list[str], *, timeout: int, cwd: Path | None = None) -> subprocess.CompletedProcess:
+        with self.lock:
+            use_sudo, password = self.use_sudo, self.sudo_password
+        if use_sudo:
+            if not shutil.which("sudo"):
+                raise RuntimeError("未找到 sudo 命令")
+            if not password:
+                raise RuntimeError("已启用 sudo，请先在页面填写 sudo 密码")
+            command = ["sudo", "-S", "-p", "", *command]
+        return subprocess.run(command, cwd=cwd, input=f"{password}\n" if use_sudo else None,
+                              capture_output=True, text=True, timeout=timeout)
+
     def _compose_prefix(self) -> list[str] | None:
         if shutil.which("docker"):
-            probe = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, timeout=8)
+            probe = self._run(["docker", "compose", "version"], timeout=8)
             if probe.returncode == 0:
                 return ["docker", "compose"]
         if shutil.which("docker-compose"):
@@ -61,30 +87,34 @@ class ComposeManager:
 
     def status(self) -> dict:
         docker_bin = shutil.which("docker")
-        compose = self._compose_prefix()
+        try:
+            compose = self._compose_prefix()
+        except RuntimeError as exc:
+            result = {"available": False, "docker_version": "", "compose_version": "", "message": str(exc), "compose_command": ""}
+            return {**result, **self.access()}
         result = {"available": False, "docker_version": "", "compose_version": "", "message": "未检测到 Docker 服务", "compose_command": ""}
         if not docker_bin:
             result["message"] = "未找到 docker 命令，请先安装并启动 Docker。"
-            return result
+            return {**result, **self.access()}
         try:
-            version = subprocess.run(["docker", "version", "--format", "{{.Server.Version}}"], capture_output=True, text=True, timeout=8)
-        except (OSError, subprocess.TimeoutExpired):
+            version = self._run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=8)
+        except (OSError, subprocess.TimeoutExpired, RuntimeError):
             result["message"] = "无法连接 Docker 守护进程。"
-            return result
+            return {**result, **self.access()}
         if version.returncode != 0:
             result["message"] = (version.stderr.strip() or "Docker 守护进程未运行。")[-300:]
-            return result
+            return {**result, **self.access()}
         result["docker_version"] = version.stdout.strip()
         if not compose:
             result["message"] = "Docker 已运行，但未检测到 Docker Compose 插件。"
-            return result
+            return {**result, **self.access()}
         try:
-            compose_version = subprocess.run([*compose, "version", "--short"], capture_output=True, text=True, timeout=8)
+            compose_version = self._run([*compose, "version", "--short"], timeout=8)
             result["compose_version"] = compose_version.stdout.strip() if compose_version.returncode == 0 else "已安装"
         except (OSError, subprocess.TimeoutExpired):
             result["compose_version"] = "已安装"
         result.update(available=True, message="Docker 与 Compose 已就绪", compose_command=" ".join(compose))
-        return result
+        return {**result, **self.access()}
 
     def _project_dir(self, project_id: str) -> Path:
         project = self.projects.get(project_id)
@@ -123,8 +153,8 @@ class ComposeManager:
             return []
         command = [*prefix, "-f", str(self._compose_file(project_id)), "ps", "--format", "json"]
         try:
-            outcome = subprocess.run(command, capture_output=True, text=True, timeout=15)
-        except (OSError, subprocess.TimeoutExpired):
+            outcome = self._run(command, timeout=15)
+        except (OSError, subprocess.TimeoutExpired, RuntimeError):
             return []
         if outcome.returncode != 0 or not outcome.stdout.strip():
             return []
@@ -165,7 +195,7 @@ class ComposeManager:
         if action not in actions:
             raise ValueError("不支持的服务操作")
         try:
-            outcome = subprocess.run([*prefix, "-f", str(self._compose_file(project_id)), *actions[action]], cwd=self._project_dir(project_id), capture_output=True, text=True, timeout=180)
+            outcome = self._run([*prefix, "-f", str(self._compose_file(project_id)), *actions[action]], cwd=self._project_dir(project_id), timeout=180)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("操作超时，请查看 Docker 状态。") from exc
         if outcome.returncode != 0:
@@ -188,7 +218,7 @@ class ComposeManager:
         if service:
             command.append(service)
         try:
-            outcome = subprocess.run(command, cwd=self._project_dir(project_id), capture_output=True, text=True, timeout=40)
+            outcome = self._run(command, cwd=self._project_dir(project_id), timeout=40)
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError("日志读取超时") from exc
         if outcome.returncode != 0:

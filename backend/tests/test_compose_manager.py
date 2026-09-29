@@ -30,3 +30,12 @@ class ComposeManagerTests(unittest.TestCase):
             status = ComposeManager(Path(folder)).status()
         self.assertFalse(status["available"])
         self.assertIn("docker", status["message"].lower())
+
+    def test_sudo_password_is_memory_only(self):
+        with tempfile.TemporaryDirectory() as folder:
+            manager = ComposeManager(Path(folder))
+            manager.configure_access(True, "local-secret")
+            self.assertTrue(manager.access()["password_set"])
+            self.assertFalse((Path(folder) / "projects.json").exists())
+            manager.configure_access(False)
+            self.assertFalse(manager.access()["password_set"])
