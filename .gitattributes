@@ -1,0 +1,2 @@
+# DBX ships native browser binaries. Keep the bundled architecture packages in Git LFS.
+backend/vendor/dbx/**/bin/dbx-web-bin filter=lfs diff=lfs merge=lfs -text

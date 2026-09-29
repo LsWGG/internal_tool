@@ -18,6 +18,7 @@ frontend/dist/
 # Runtime data, uploads and generated exports
 tmp/
 backend/*_data/
+backend/dbx_data/
 
 # Version system settings; keep other runtime data ignored.
 !backend/catalog_data/

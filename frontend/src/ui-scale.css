@@ -72,8 +72,66 @@
 }
 @media (min-width:3200px){
   :root{
-    --ui-scale:1.30; --ui-frame:1.60; --ui-stage-scale:1.45;
+    /* 4K needs more than a larger type ramp: keeping the 1440px desktop frame
+       at 1.6 left almost 800px of unused space on either side.  A six-column
+       catalog and a 2880px work area use the extra width while keeping each
+       card / form column inside a comfortable reading measure. */
+    --ui-scale:1.30; --ui-frame:2; --ui-stage-scale:1.55;
+    --ui-catalog-w:2880px; --ui-catalog-cols:6;
+    /* A capped fluid gutter also behaves correctly in browser zoom / remote
+       display modes where the rendered layout viewport is smaller than the
+       reported physical 4K width. */
+    --ui-catalog-gutter:48px;
   }
+}
+
+/* A 4K display often reports only 1920–2560 CSS pixels when the operating
+   system uses 150% or 200% display scaling. Treat a high-density wide viewport
+   as the same class of workspace, otherwise the physical screen gets the
+   conservative 1080p layout and the improvement is effectively invisible. */
+@media (min-width:1600px) and (min-resolution:1.5dppx){
+  :root{
+    --ui-scale:1.18;
+    --ui-frame:1.65;
+    --ui-stage-scale:1.32;
+    --ui-catalog-w:2200px;
+    --ui-catalog-cols:5;
+    --ui-catalog-gutter:40px;
+  }
+}
+
+/* 4K at 300% display scaling is reported by Chromium as roughly 1280 CSS px
+   at DPR 2. This is the actual environment used by the desktop app, so it
+   needs its own full-width layout tier instead of falling back to 3 cards. */
+@media (min-width:1200px) and (max-width:1599px) and (min-resolution:1.5dppx){
+  :root{
+    --ui-scale:1.10;
+    --ui-frame:1.45;
+    --ui-stage-scale:1.22;
+    --ui-catalog-w:100%;
+    --ui-catalog-cols:4;
+    --ui-catalog-gutter:32px;
+  }
+  main.ui-shell:not(.is-portal){max-width:none;width:100%;padding-left:32px;padding-right:32px}
+  .ui-shell .crawler-page>:is(.crawler-hero,.crawler-workspace){width:100%;max-width:none}
+}
+
+/* The portal is the home screen, so it must be sized to the viewport rather
+   than to any host/container that embeds the app. This also removes the large
+   side gutters visible on scaled 4K desktops. */
+.ui-shell.is-portal{
+  position:fixed!important;
+  inset:0;
+  box-sizing:border-box;
+  width:100vw!important;
+  max-width:none!important;
+  margin:0!important;
+}
+.ui-shell.is-portal .catalog-page,
+.ui-shell.is-portal :is(.catalog-head,.catalog-scroll){
+  box-sizing:border-box;
+  width:100%!important;
+  max-width:none!important;
 }
 
 /* The workbench stage also drinks the extra vertical room a large display has, which is
@@ -96,7 +154,29 @@
   .ui-shell:not(.is-portal){--ui-stage-height:clamp(720px, calc(100dvh - 620px), 1000px)}
 }
 @media (min-width:3200px){
-  .ui-shell:not(.is-portal){--ui-stage-height:clamp(880px, calc(100dvh - 700px), 1450px)}
+  .ui-shell:not(.is-portal){--ui-stage-height:clamp(880px, calc(100dvh - 700px), 1550px)}
+
+  /* Keep the application chrome visually anchored instead of letting a wide
+     viewport turn every page into a single, overlong text column. */
+  main.ui-shell:not(.is-portal){padding-left:48px;padding-right:48px}
+
+  /* Wide data queues benefit from a little more separation between their
+     four roles (name, progress, status and actions). */
+  .ui-shell .task{gap:calc(24px * var(--ui-scale))!important}
+}
+
+@media (min-width:1600px) and (min-resolution:1.5dppx) and (max-width:3199px){
+  .ui-shell:not(.is-portal){--ui-stage-height:clamp(720px, calc(100dvh - 620px), 1160px)}
+  main.ui-shell:not(.is-portal){max-width:none;width:100%;padding-left:40px;padding-right:40px}
+  .ui-shell .crawler-page>:is(.crawler-hero,.crawler-workspace){width:100%;max-width:none}
+  .ui-shell .task{gap:calc(21px * var(--ui-scale))!important}
+}
+
+@media (min-width:3200px){
+  /* Full-width mode: only the safety padding remains.  Tool workspaces inherit
+     the available width instead of being centered inside a desktop-sized cap. */
+  main.ui-shell:not(.is-portal){max-width:none;width:100%;padding-left:48px;padding-right:48px}
+  .ui-shell .crawler-page>:is(.crawler-hero,.crawler-workspace){width:100%;max-width:none}
 }
 
 /* Inherited from the retired 4K block in ui-refinement.css: panels that are not children of

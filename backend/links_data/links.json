@@ -9,6 +9,15 @@
       "category": "delivery",
       "embeddable": false,
       "frame_policy": "frame-ancestors 'self'"
+    },
+    {
+      "id": "e7a12c8d1ae2",
+      "name": "ilovepdf",
+      "description": "完全免费、易于使用、丰富的PDF处理工具，包括：合并、拆分、压缩、转换、旋转和解锁PDF文件，以及给PDF文件添加水印的工具等。仅需几秒钟即可完成。",
+      "url": "https://www.ilovepdf.com/zh-cn",
+      "category": "documents",
+      "embeddable": true,
+      "frame_policy": ""
     }
   ]
 }

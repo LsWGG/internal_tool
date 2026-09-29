@@ -1,4 +1,5 @@
 from pathlib import Path, PurePosixPath
+from contextlib import asynccontextmanager
 import re
 import shutil
 import subprocess
@@ -25,6 +26,7 @@ from .mermaid_manager import MermaidExportManager
 from .image_convert_manager import ImageConvertManager
 from .database_manager import DatabaseClient, DatabaseTaskManager
 from .propzone_manager import PropZoneTaskManager
+from .dbx_manager import DBXManager
 from .crawler_manager import CrawlerTaskManager
 from . import crawler_douyin_login
 from .word_batch_api import make_router as make_word_batch_router
@@ -37,7 +39,18 @@ from .ai_capabilities import validate_action
 import json
 import zipfile
 
-app = FastAPI(title="地图数据下载服务", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # DBX is a bundled local companion service. Start it with the API process
+    # and only terminate the process that this instance created on shutdown.
+    dbx_manager.start()
+    try:
+        yield
+    finally:
+        dbx_manager.stop()
+
+
+app = FastAPI(title="地图数据下载服务", version="1.0.0", lifespan=lifespan)
 app.include_router(make_pdf_toolbox_router())
 app.include_router(make_model_settings_router())
 app.include_router(make_word_batch_router(Path(__file__).resolve().parents[1] / 'word_batch_data'))
@@ -73,13 +86,20 @@ database_task_manager = DatabaseTaskManager(
 )
 propzone_manager = PropZoneTaskManager(Path(__file__).resolve().parents[1] / "propzone_data")
 crawler_manager = CrawlerTaskManager(Path(__file__).resolve().parents[1] / "crawler_data")
+dbx_manager = DBXManager(Path(__file__).resolve().parents[1])
 sqlite_workspace_dir = database_task_manager.data_dir / "sqlite_workspaces"
 sqlite_workspace_dir.mkdir(parents=True, exist_ok=True)
-
 
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/dbx/status")
+def dbx_status():
+    # Also provides a lightweight recovery path if DBX was stopped separately.
+    dbx_manager.start()
+    return dbx_manager.status()
 
 
 @app.get("/api/ai/capabilities")

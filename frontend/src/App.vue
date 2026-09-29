@@ -9,6 +9,7 @@ import ToolPortal from './ToolPortal.vue'
 import AiAssistant from './AiAssistant.vue'
 import ThemeToggle from './ThemeToggle.vue'
 import TilePreviewTool from './TilePreviewTool.vue'
+import DbxPage from './DbxPage.vue'
 import MermaidExportTool from './MermaidExportTool.vue'
 import CleanTool from './CleanTool.vue'
 const PdfToolbox=defineAsyncComponent(()=>import('./PdfToolbox.vue'))
@@ -640,6 +641,7 @@ onBeforeUnmount(()=>{clearInterval(timer);stopDouyinLoginPolling();clearTimeout(
     <ExternalToolPage v-if="linkId&&linksLoaded" :tool="currentLink" :offline="linksFailed" />
     <SettingsDialog v-if="settingsOpen" :links="links" :confirm-action="ask" :icon-component="AiIcon" :icon-names="iconNames" @close="closeSettings" @saved="loadLinks" />
     <TilePreviewTool v-if="view==='tile-viewer'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
+    <DbxPage v-if="view==='dbx'" />
     <section v-if="view==='crawler'" class="crawler-page" :class="{'crawler-account-mode':crawlerSource==='twitter'&&crawlerTwitterMode!=='keyword'}">
       <header class="crawler-hero"><div class="crawler-hero-copy"><div class="crawler-hero-symbol"><AiIcon name="layers" /></div><div><span class="eyebrow">SMART WEB COLLECTION</span><h1>智能网页采集</h1><p>按来源完成搜索、发现与字段提取，将公开内容整理为可交付数据。</p></div></div><div class="crawler-hero-pills"><span>公开数据</span><span>可视化选取</span><span>定时导出</span></div></header>
       <div class="crawler-workspace"><aside class="panel crawler-config">

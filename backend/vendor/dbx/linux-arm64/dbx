@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+export DBX_PACKAGE_ROOT="$ROOT"
+#export DBX_STATIC_DIR="${DBX_STATIC_DIR:-$ROOT/dist}"
+export DBX_DATA_DIR="${DBX_DATA_DIR:-$ROOT/data}"
+port="${DBX_PORT:-4224}"
+base_path="${DBX_PUBLIC_BASE_PATH:-/}"
+case "$base_path" in
+  "") base_path="/" ;;
+  /*) ;;
+  *) base_path="/$base_path" ;;
+esac
+printf 'DBX browser UI: http://127.0.0.1:%s%s\n' "$port" "$base_path"
+cd "$ROOT"
+exec "$ROOT/bin/dbx-web-bin" "$@"

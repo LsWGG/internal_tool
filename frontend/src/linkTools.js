@@ -28,6 +28,12 @@ export function linkHost(url){
   try{return new URL(String(url||'')).host}catch{return''}
 }
 
+// iLovePDF 会在文档中明确拒绝 iframe。它的响应头探测可能受 CDN、地区路由或
+// 重定向影响而得到过期的“可嵌入”结果，因此在客户端也保留这条服务商级兜底。
+function providerBlocksEmbedding(link){
+  try{return /(^|\.)ilovepdf\.com$/i.test(new URL(String(link?.url||'')).hostname)}catch{return false}
+}
+
 /** 分类落点：认得出的分类挂到那一组，认不出的（含空值）归到「外链工具」组。
  *
  * 服务端不校验分类（分类表在前端），所以这里是「未知值长不出空分组」的那道闸。
@@ -46,7 +52,12 @@ export function linkGroupId(category){
  */
 export function frameState(link){
   const value=link?.embeddable
-  return {blocked:value===false,known:value===true||value===false,policy:link?.frame_policy||''}
+  const providerBlocked=providerBlocksEmbedding(link)
+  return {
+    blocked:value===false||providerBlocked,
+    known:value===true||value===false||providerBlocked,
+    policy:link?.frame_policy||(providerBlocked?'iLovePDF 禁止 iframe 嵌入':'')
+  }
 }
 
 /** 目录卡片数据。id 加前缀是为了和内置工具同处一个命名空间而不撞车（内置 id 里没有冒号）。 */

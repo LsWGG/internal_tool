@@ -136,6 +136,32 @@ def _request_structured_plan(url, headers, body, agent_messages, last_error, req
     return result
 
 
+def _retry_context(message, error):
+    """Preserve reasoning-model context when asking it to repair a tool call.
+
+    DeepSeek thinking models return ``reasoning_content`` alongside the normal
+    assistant message.  When a tool schema/argument check fails, resending only
+    prose loses that chain of thought and some providers reject the follow-up.
+    Keep the assistant turn intact and answer each tool call with a standard
+    tool-result error, so the next planning turn can correct it.
+    """
+    assistant = {"role": "assistant", "content": str(message.get("content") or "")[:2000]}
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        assistant["reasoning_content"] = reasoning[:12000]
+    calls = message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []
+    if calls:
+        assistant["tool_calls"] = calls
+    feedback = []
+    for call in calls:
+        call_id = str(call.get("id") or "").strip() if isinstance(call, dict) else ""
+        if call_id:
+            feedback.append({"role": "tool", "tool_call_id": call_id,
+                             "content": json.dumps({"error": error}, ensure_ascii=False)})
+    feedback.append({"role": "user", "content": f"工具调用未通过能力注册表校验：{error}。请观察错误后重新规划，并只通过一个已注册函数返回修正结果。不要在普通文本中书写函数名或 JSON。"})
+    return [assistant, *feedback]
+
+
 def _request_route_decision(url, headers, model, messages, catalog, draft, observations=None):
     """Let the model decide whether the request needs a portal capability.
 
@@ -172,7 +198,10 @@ def _request_route_decision(url, headers, model, messages, catalog, draft, obser
         "messages": [*messages[-10:], {"role": "user", "content": instruction}],
         "temperature": 0,
         "tools": [route_tool],
-        "tool_choice": {"type": "function", "function": {"name": "route_request"}},
+        # DeepSeek Flash's thinking mode rejects forced tool_choice. The prompt
+        # already requires route_request, and auto still returns that function
+        # while remaining compatible with providers that forbid forced calls.
+        "tool_choice": "auto",
     }, timeout=60)
     response.raise_for_status()
     message = response.json().get("choices", [{}])[0].get("message", {})
@@ -265,7 +294,11 @@ def _plan_chat(payload):
     try:
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         request_messages = [{"role": "system", "content": system}, *messages]
-        body = {"model": model, "messages": request_messages, "tools": GENERIC_FUNCTIONS, "tool_choice": "required", "temperature": 0.1}
+        # Some OpenAI-compatible reasoning models (including DeepSeek Flash)
+        # reject tool_choice="required". The system prompt still requires a
+        # registered function for portal operations; auto preserves that path
+        # while allowing ordinary conversational replies.
+        body = {"model": model, "messages": request_messages, "tools": GENERIC_FUNCTIONS, "tool_choice": "auto", "temperature": 0.1}
         agent_messages = request_messages
         last_error = ""
         last_content = ""
@@ -303,11 +336,7 @@ def _plan_chat(payload):
                     break
                 # Feed the observation back to the model so it can revise its
                 # own action. The server never guesses intent from keywords.
-                agent_messages = [
-                    *agent_messages,
-                    {"role": "assistant", "content": str(message.get("content") or "")[:2000]},
-                    {"role": "user", "content": f"工具调用未通过能力注册表校验：{last_error}。请观察错误后重新规划，并只通过一个已注册函数返回修正结果。不要在普通文本中书写函数名或 JSON。"},
-                ]
+                agent_messages = [*agent_messages, *_retry_context(message, last_error)]
         # Compatibility path for providers that accept OpenAI-style tools but
         # occasionally drop tool_calls on conversational follow-up turns.
         try:

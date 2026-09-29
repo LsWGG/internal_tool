@@ -11,6 +11,7 @@ export const toolGroups=[
     {id:'shp',name:'SHP 文件预览',tag:'空间数据查看',description:'叠加多个 Shapefile，独立控制图层显隐、定位与删除。',keywords:'shapefile gis 预览',icon:'geo'},
   ]},
   {id:'database',name:'数据库',english:'DATABASES',description:'在线管理数据库，完成数据备份、恢复与迁移。',icon:'data',tools:[
+    {id:'dbx',name:'DBX 数据库工作台',tag:'本地管理',description:'项目启动时自动运行本机对应架构的 DBX，在页面内连接和管理数据库。',keywords:'dbx 数据库 sql sqlite mysql postgres 本地 管理 工作台',icon:'data'},
     {id:'database',name:'数据库在线操作',tag:'查询与编辑',description:'连接 PostgreSQL、SQLite、Redis，浏览数据并进行 CRUD。',keywords:'pg postgres sqlite redis sql 导入 导出 迁移',icon:'data'},
     {id:'es',name:'Elasticsearch 数据迁移',tag:'搜索数据库',description:'导入导出索引结构及文档，管理备份和恢复任务。',keywords:'es elasticsearch 索引 mapping',icon:'data'},
     {id:'nebula',name:'NebulaGraph 数据迁移',tag:'图数据库',description:'迁移 Space、Tag、Edge，以及点和边数据。',keywords:'nebula 图数据库',icon:'graph'},

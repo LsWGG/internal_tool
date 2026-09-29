@@ -115,6 +115,7 @@ CAPABILITIES = {
     "gjb": _manual("gjb", "GJB 地图转 SHP", "上传完整 GJB 文件组并转换。", uploads=True),
     "shp": _manual("shp", "SHP 文件预览", "上传并叠加预览 Shapefile。", uploads=True),
     "database": _manual("database", "数据库在线操作", "PostgreSQL、SQLite、Redis 的 CRUD 与迁移。", uploads=True, credentials=True),
+    "dbx": _manual("dbx", "DBX 数据库工作台", "打开随项目启动的本地 DBX，连接并管理数据库。", credentials=True),
     "es": _manual("es", "Elasticsearch 数据迁移", "ES 索引导入与导出。", uploads=True, credentials=True),
     "nebula": _manual("nebula", "NebulaGraph 数据迁移", "NebulaGraph Space 数据导入与导出。", uploads=True, credentials=True),
     "word-batch": _manual("word-batch", "Word 批量生成", "使用 Word 模板和 Excel 批量生成文档。", uploads=True),

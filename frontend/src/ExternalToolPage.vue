@@ -41,10 +41,9 @@ const host=computed(()=>linkHost(props.tool?.url)||props.tool?.url||'')
 
       <template v-else>
         <div class="link-frame-wrap">
-          <!-- sandbox 是「让站点在自己的源里正常跑」的常规配方：allow-scripts + allow-same-origin
-               只对**它自己的**源生效（跨源，相对本系统不是逃逸口），表单、下载、弹窗是内部
-               工具常见的需要。这里不做更严的限制，否则大多数在线工具会直接坏掉。 -->
-          <iframe :key="nonce" class="link-frame" :src="tool.url" :title="tool.name" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads" @load="loaded=true"></iframe>
+          <!-- 外部 iframe 是跨源内容，前端不能重写其 target=_blank。保留弹窗权限，
+               以免第三方工具的链接被浏览器静默拦截；页面自身使用 _top 的跳转仍由当前页承接。 -->
+          <iframe :key="nonce" class="link-frame" :src="tool.url" :title="tool.name" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-top-navigation-by-user-activation" @load="loaded=true"></iframe>
           <div v-if="!loaded" class="link-loading" aria-live="polite">正在加载 {{tool.url}} …</div>
         </div>
       </template>
