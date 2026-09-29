@@ -34,6 +34,7 @@ export const toolGroups=[
   ]},
   {id:'delivery',name:'开发交付',english:'DEVELOPMENT & DELIVERY',description:'为离线部署准备软件安装包。',icon:'package',tools:[
     {id:'json',name:'JSON 解析工具',tag:'解析与对比',description:'上传或粘贴 JSON，格式化、树形浏览、JSONPath 查询、格式转换与双栏差异对比。',keywords:'json jsonpath yaml csv jsonl 格式化 解析 对比 树形',icon:'data'},
+    {id:'compose-manager',name:'Docker 服务管理',tag:'Compose 工作台',description:'集中管理 compose 文件，检测本机 Docker，快速启动、停止、重启与查看服务日志。',keywords:'docker compose 容器 服务 启动 停止 重启 日志 yaml 开发 测试',icon:'package'},
     {id:'docker',name:'Docker 离线包',tag:'离线部署',description:'选择系统架构和版本，生成 Docker、Compose 与安装脚本。',keywords:'docker compose linux devops 离线',icon:'package'},
   ]},
 ]

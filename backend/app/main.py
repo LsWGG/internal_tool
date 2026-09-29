@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 
 from .docker_manager import DockerTaskManager
+from .compose_manager import ComposeManager
 from .gjb_manager import GJBTaskManager
 from .es_manager import ESClient, ESTaskManager
 from .nebula_manager import NebulaTaskManager
@@ -64,6 +65,7 @@ docker_manager = DockerTaskManager(
     Path(__file__).resolve().parents[1] / "docker_data",
     Path(__file__).resolve().parents[1] / "download_docker_offline.sh",
 )
+compose_manager = ComposeManager(Path(__file__).resolve().parents[1] / "compose_data")
 gjb_manager = GJBTaskManager(Path(__file__).resolve().parents[1] / "gjb_data")
 es_manager = ESTaskManager(Path(__file__).resolve().parents[1] / "es_data")
 nebula_manager = NebulaTaskManager(Path(__file__).resolve().parents[1] / "nebula_data",
@@ -100,6 +102,81 @@ def dbx_status():
     # Also provides a lightweight recovery path if DBX was stopped separately.
     dbx_manager.start()
     return dbx_manager.status()
+
+
+@app.get("/api/compose/status")
+def compose_status():
+    return compose_manager.status()
+
+
+@app.get("/api/compose/projects")
+def list_compose_projects():
+    return compose_manager.list()
+
+
+@app.post("/api/compose/projects", status_code=201)
+def create_compose_project(payload: dict):
+    try:
+        return compose_manager.create(payload.get("name", ""), payload.get("content", ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/compose/projects/import", status_code=201)
+async def import_compose_project(name: str = Form(""), file: UploadFile = File(...)):
+    try:
+        content = (await file.read()).decode("utf-8")
+        return compose_manager.create(name or Path(file.filename or "compose").stem, content)
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "compose 文件必须为 UTF-8 文本") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/compose/projects/{project_id}")
+def get_compose_project(project_id: str):
+    try:
+        return compose_manager.get(project_id)
+    except KeyError as exc:
+        raise HTTPException(404, "未找到该 Compose 项目") from exc
+
+
+@app.put("/api/compose/projects/{project_id}")
+def update_compose_project(project_id: str, payload: dict):
+    try:
+        return compose_manager.update(project_id, payload.get("name", ""), payload.get("content", ""))
+    except KeyError as exc:
+        raise HTTPException(404, "未找到该 Compose 项目") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/compose/projects/{project_id}/{action}")
+def run_compose_action(project_id: str, action: str):
+    try:
+        return compose_manager.action(project_id, action)
+    except KeyError as exc:
+        raise HTTPException(404, "未找到该 Compose 项目") from exc
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/compose/projects/{project_id}/logs")
+def get_compose_logs(project_id: str, service: str = "", tail: int = 200):
+    try:
+        return {"logs": compose_manager.logs(project_id, service, tail)}
+    except KeyError as exc:
+        raise HTTPException(404, "未找到该 Compose 项目") from exc
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.delete("/api/compose/projects/{project_id}", status_code=204)
+def delete_compose_project(project_id: str):
+    try:
+        compose_manager.delete(project_id)
+    except KeyError as exc:
+        raise HTTPException(404, "未找到该 Compose 项目") from exc
 
 
 @app.get("/api/ai/capabilities")
