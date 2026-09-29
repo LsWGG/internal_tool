@@ -120,6 +120,12 @@ def list_compose_projects():
     return compose_manager.list()
 
 
+@app.post("/api/compose/validate")
+def validate_compose_project(payload: dict):
+    # 编辑器的语法检测：只读、不落盘，因此永远不会 4xx —— 有毛病就写在 problems 里。
+    return compose_manager.validate(payload.get("content", ""))
+
+
 @app.post("/api/compose/projects", status_code=201)
 def create_compose_project(payload: dict):
     try:

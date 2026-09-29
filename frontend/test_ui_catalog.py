@@ -8,9 +8,12 @@ with sync_playwright() as p:
     page.route('**/api/**', lambda route: route.abort())
     page.goto('http://127.0.0.1:5174/')
     page.locator('.catalog-card').first.wait_for()
-    assert page.locator('.catalog-card').count() == 18
+    # 22 = the built-in tools in toolCatalog.js. The store's own external shortcuts (a second
+    # card in 文档处理 and in 开发工具) come from /api/links, which this suite aborts, so they
+    # are absent here -- that absence is also why these two counts must stay equal.
+    assert page.locator('.catalog-card').count() == 22
     assert page.locator('.catalog-group').count() == 6
-    assert len(set(page.locator('.catalog-card').evaluate_all('(items)=>items.map(x=>x.hash)'))) == 18
+    assert len(set(page.locator('.catalog-card').evaluate_all('(items)=>items.map(x=>x.hash)'))) == 22
     fixed_top = page.locator('.catalog-head').bounding_box()['y']
     for group in ['geo','database','documents','images','collection','delivery']:
         page.locator(f'.catalog-nav button').nth(['geo','database','documents','images','collection','delivery'].index(group)).click()
@@ -29,7 +32,13 @@ with sync_playwright() as p:
     page.set_viewport_size({'width': 390, 'height': 844})
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     page.screenshot(path='/private/tmp/portal-refined-mobile.png', full_page=True)
-    routes=['map','propzone','gjb','shp','database','es','nebula','pdf','word-batch','md-word','image-convert','image-metadata','crawler','trending','docker','clean']
+    # Every built-in route, in catalog order. The pages listed below either never had the shared
+    # 400/580 workbench or replaced it on purpose (tile-viewer keeps its own 350px column,
+    # json/mermaid/compose declare their own grids) -- they are still swept for title size,
+    # scroll position and 390px overflow, they just have no entry in `workspaces`.
+    routes=['map','tile-viewer','propzone','gjb','shp','dbx','database','es','nebula',
+            'pdf-toolbox','pdf','word-batch','md-word','mermaid-export','clean',
+            'image-convert','image-metadata','crawler','trending','json','compose-manager','docker']
     workspaces={'map':'.workspace','propzone':'.propzone-workspace','gjb':'.gjb-workspace','shp':'.shp-workspace','es':'.es-workspace','nebula':'.es-workspace','pdf':'.pdf-workspace','word-batch':'.wb-workspace','md-word':'.md-word-workspace','image-convert':'.image-convert-workspace','docker':'.docker-workspace','clean':'.clean-workspace'}
     measurements=[]
     for route in routes:
@@ -70,7 +79,10 @@ with sync_playwright() as p:
         measurements.append((route, page.evaluate('document.documentElement.scrollWidth-innerWidth')))
         assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'), route
     # 3840x2160. Nothing above this line exercises a viewport wider than 1440, so without this
-    # block the whole >=1800 branch of ui-scale.css has no automated guard at all.
+    # block the whole >=1800 branch of ui-scale.css has no automated guard at all. The literals
+    # below are the >=3200 tier's contract: --ui-frame:2 makes the content/browse column 2752px
+    # (1376x2) and the catalog 2880px over six columns, and the portal is full-bleed (its shell
+    # is fixed to 100vw, so the head spans the viewport rather than the 2752 content column).
     page.set_viewport_size({'width':3840,'height':2160})
     page.evaluate('()=>location.hash="home"')
     page.wait_for_timeout(400)
@@ -78,10 +90,13 @@ with sync_playwright() as p:
     portal = page.evaluate('''()=>({
       cards: getComputedStyle(document.querySelector('.catalog-cards')).gridTemplateColumns.split(' ').length,
       cardWidth: document.querySelector('.catalog-card').getBoundingClientRect().width,
+      headW: document.querySelector('.catalog-head').getBoundingClientRect().width,
+      vw: innerWidth,
       overflow: document.documentElement.scrollWidth - innerWidth,
     })''')
-    assert portal['cards'] == 5, portal
-    assert portal['cardWidth'] > 380, portal
+    assert portal['cards'] == 6, portal
+    assert abs(portal['cardWidth'] - 607) <= 2, portal
+    assert abs(portal['headW'] - portal['vw']) <= 1, portal
     assert portal['overflow'] <= 0, portal
 
     # The workbench selector is scoped per route on purpose. The map page is the one route kept
@@ -102,13 +117,17 @@ with sync_playwright() as p:
                   h1:parseFloat(getComputedStyle(h1).fontSize),
                   sidebar:getComputedStyle(ws).gridTemplateColumns.split(' ')[0],
                   stage:Math.round(ws.getBoundingClientRect().height),
+                  scroll:document.documentElement.scrollHeight-innerHeight,
                   overflow:document.documentElement.scrollWidth-innerWidth};
         }''', ws_sel)))
     for route,m in quad:
-        assert abs(m['w']-2202) <= 2, (route,m)
+        # 2752 = 1376 x --ui-frame 2; the stage is the >=3200 tier's measured 700px-of-chrome
+        # offset (2160 - 700), which is what keeps these two pages from scrolling at 4K.
+        assert abs(m['w']-2752) <= 2, (route,m)
         assert abs(m['h1']-37.7) < 0.6, (route,m)
         assert m['sidebar'] == '520px', (route,m)
-        assert m['stage'] > 880, (route,m)
+        assert abs(m['stage']-1460) <= 2, (route,m)
+        assert m['scroll'] <= 0, (route,m)
         assert m['overflow'] <= 0, (route,m)
 
     # image-metadata gets a different guard because it has no workbench at all until a file is
@@ -123,7 +142,7 @@ with sync_playwright() as p:
       empty: Math.round(document.querySelector('.metadata-empty').getBoundingClientRect().height),
       overflow: document.documentElement.scrollWidth - innerWidth,
     })''')
-    assert abs(meta['w']-2202) <= 2, meta
+    assert abs(meta['w']-2752) <= 2, meta
     assert abs(meta['empty']-624) <= 2, meta
     assert meta['overflow'] <= 0, meta
     print(quad, meta)

@@ -10,9 +10,15 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import yaml
+
 
 class ComposeManager:
     """Stores compose files locally and only executes commands for stored projects."""
+
+    # compose 规范里的顶层字段；`x-` 前缀是规范留给扩展的，不算错。
+    TOP_LEVEL_FIELDS = frozenset(
+        {"name", "version", "services", "networks", "volumes", "configs", "secrets", "include"})
 
     def __init__(self, root: Path):
         self.root = root
@@ -54,10 +60,106 @@ class ComposeManager:
             raise ValueError("compose 文件必须包含 services: 配置")
         return value
 
+    @staticmethod
+    def _key_name(node) -> str:
+        """映射键的文本。键不是标量（`? [a, b]`）时给空串：这里只做提示，不替用户解释。"""
+        return node.value if isinstance(node, yaml.ScalarNode) else ""
+
+    def validate(self, content: str) -> dict:
+        """只读地检查一段 compose 文本，返回 {"problems": [{"line", "text", "severity"}]}。
+
+        编辑器用它划波浪线，因此**不落盘、不碰 docker、不抛异常**。
+
+        用 `yaml.compose_all` 拿节点树而不是 `safe_load`：节点的组合阶段不会构造对象，
+        于是 `!reset` / `!override` 这类 compose 自己的标签不会被判成「不认识的标签」
+        （构造阶段才会），而我们照样能拿到每个键的行号、看出重复的键。
+        报出来的行号是 1 起、且一定落在有内容的行上 —— 编辑器按行划线。
+
+        检查口径和 `_validate_content` 对齐：保存那条路会拒的（太大、没有 services），
+        这里必须也是错误级，否则会出现「编辑器不划线但保存失败」。其余（没写 image、
+        顶层字段不认识、键重复）是警告：compose 多半跑不起来，但不是这个文件语法上的错。
+        """
+        problems: list[dict] = []
+        source = (content or "").replace("\r\n", "\n")
+        rows = source.split("\n")
+
+        def note(line: int, message: str, severity: str = "error") -> None:
+            """行号一律落在**有内容**的行上。
+
+            空白行既划不出波浪线（零长度的标记，编辑器画不出来），用户看着也不知道该改什么。
+            PyYAML 遇到「写到一半就断了」的文件时，problem_mark 指的是 EOF —— 那往往正是文末
+            那个空行，往回退到最后一个有内容的行，才是他该下手的地方。
+            """
+            line = max(1, int(line))
+            while line > 1 and line <= len(rows) and not rows[line - 1].strip():
+                line -= 1
+            problems.append({"line": line, "text": message, "severity": severity})
+
+        if not source.strip():
+            note(1, "compose 文件是空的")
+            return {"problems": problems}
+        if len(source) > 500_000:
+            note(1, "compose 文件不能超过 500 KB")
+            return {"problems": problems}
+        try:
+            documents = list(yaml.compose_all(source))
+        except yaml.YAMLError as error:
+            mark = getattr(error, "problem_mark", None) or getattr(error, "context_mark", None)
+            note(mark.line + 1 if mark else 1, getattr(error, "problem", None) or "YAML 语法错误")
+            return {"problems": problems}
+        if not documents or documents[0] is None:
+            note(1, "compose 文件是空的")
+            return {"problems": problems}
+        if len(documents) > 1:
+            note(1, "文件里有多个 YAML 文档，Docker Compose 只读第一个", "warning")
+        root = documents[0]
+        if not isinstance(root, yaml.MappingNode):
+            note(root.start_mark.line + 1, "顶层必须是一组键值（services: …）")
+            return {"problems": problems}
+
+        fields: dict[str, object] = {}
+        lines: dict[str, int] = {}
+        for key_node, value_node in root.value:
+            name = self._key_name(key_node)
+            line = key_node.start_mark.line + 1
+            if name in fields:
+                note(line, f"顶层字段 “{name}” 重复定义，只有最后一个生效")
+            fields[name], lines[name] = value_node, line
+        if "services" not in fields:
+            note(1, "缺少 services: —— compose 文件至少要有一个服务")
+            return {"problems": problems}
+
+        services = fields["services"]
+        if not isinstance(services, yaml.MappingNode) or not services.value:
+            note(services.start_mark.line + 1, "services: 下面还没有服务")
+            return {"problems": problems}
+        # 服务名重复要在**同一层**里看：下面那条只查服务内部的字段。划在最后一次出现的行上。
+        service_lines: dict[str, list[int]] = {}
+        for item, _ in services.value:
+            service_lines.setdefault(self._key_name(item), []).append(item.start_mark.line + 1)
+        for name, seen in service_lines.items():
+            if len(seen) > 1:
+                note(seen[-1], f"服务 “{name}” 重复定义，只有最后一个生效", "warning")
+        for key_node, service in services.value:
+            name, line = self._key_name(key_node), key_node.start_mark.line + 1
+            if not isinstance(service, yaml.MappingNode):
+                note(line, f"服务 “{name}” 必须是一组键值（image: …）")
+                continue
+            keys = [self._key_name(item) for item, _ in service.value]
+            if "image" not in keys and "build" not in keys:
+                note(line, f"服务 “{name}” 既没有 image 也没有 build", "warning")
+            for field in dict.fromkeys(keys):
+                if keys.count(field) > 1:
+                    note(line, f"服务 “{name}” 里的 “{field}” 重复定义，只有最后一个生效")
+        for name, line in lines.items():
+            if name not in self.TOP_LEVEL_FIELDS and not name.startswith("x-"):
+                note(line, f"顶层字段 “{name}” 不是 compose 认识的字段", "warning")
+        return {"problems": problems}
+
     def configure_access(self, use_sudo: bool, password: str = "") -> dict:
         with self.lock:
             self.use_sudo = bool(use_sudo)
-            self.sudo_password = password if self.use_sudo else ""
+            self.sudo_password = (password or self.sudo_password) if self.use_sudo else ""
         return self.access()
 
     def access(self) -> dict:

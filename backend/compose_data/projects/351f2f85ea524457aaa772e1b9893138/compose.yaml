@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # 启用密码认证 + 开启 AOF 持久化
+    command: redis-server --requirepass redis123 --appendonly yes
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis123", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # 可选：资源限制
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 512M
+
+volumes:
+  redis_data:
+    driver: local

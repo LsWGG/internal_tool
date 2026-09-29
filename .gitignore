@@ -27,6 +27,13 @@ backend/catalog_data/*
 !backend/links_data/
 backend/links_data/*
 !backend/links_data/links.json
+# Docker service management: the compose files are hand-written configuration, not cache.
+!backend/compose_data/
+# GitHub trending: version only the user's own favorites. The date-named daily reports
+# are regenerated and pruned by the backend, so tracking them is pure churn.
+!backend/github_trending_data/
+backend/github_trending_data/*
+!backend/github_trending_data/favorites.json
 backend/**/uploads/
 backend/**/outputs/
 backend/cache/
