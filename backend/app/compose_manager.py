@@ -29,6 +29,7 @@ class ComposeManager:
         # to compose files, metadata, logs, or the project repository.
         self.use_sudo = False
         self.sudo_password = ""
+        self.pulling_images: set[str] = set()
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         try:
             self.projects = json.loads(self.state_file.read_text("utf-8"))
@@ -156,6 +157,44 @@ class ComposeManager:
                 note(line, f"顶层字段 “{name}” 不是 compose 认识的字段", "warning")
         return {"problems": problems}
 
+    @staticmethod
+    def _image_reference(image: str) -> str:
+        if not isinstance(image, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,511}", image):
+            raise ValueError("镜像名称无效；请先将 Compose 中的变量替换为具体镜像名称")
+        return image
+
+    def image_status(self, image: str) -> dict:
+        image = self._image_reference(image)
+        try:
+            result = self._run(["docker", "image", "inspect", image], timeout=15)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError("镜像检测失败，请检查 Docker 连接") from exc
+        if result.returncode == 0:
+            return {"image": image, "exists": True}
+        message = result.stderr.strip() or result.stdout.strip()
+        if "no such image" in message.lower() or "no such object" in message.lower():
+            return {"image": image, "exists": False}
+        raise RuntimeError((message or "镜像检测失败")[-1000:])
+
+    def pull_image(self, image: str) -> dict:
+        image = self._image_reference(image)
+        with self.lock:
+            if image in self.pulling_images:
+                raise RuntimeError("该镜像正在拉取，请稍后重新检测")
+            self.pulling_images.add(image)
+        try:
+            result = self._run(["docker", "pull", image], timeout=600)
+            if result.returncode:
+                raise RuntimeError((result.stderr.strip() or "镜像拉取失败")[-1000:])
+            return self.image_status(image)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("镜像拉取超时，请重新检测本机镜像后重试") from exc
+        except OSError as exc:
+            raise RuntimeError("无法执行 Docker，请检查安装与权限") from exc
+        finally:
+            with self.lock:
+                self.pulling_images.discard(image)
+
     def configure_access(self, use_sudo: bool, password: str = "") -> dict:
         with self.lock:
             self.use_sudo = bool(use_sudo)
@@ -253,7 +292,7 @@ class ComposeManager:
         prefix = self._compose_prefix()
         if not prefix:
             return []
-        command = [*prefix, "-f", str(self._compose_file(project_id)), "ps", "--format", "json"]
+        command = [*prefix, "-f", str(self._compose_file(project_id)), "ps", "--all", "--format", "json"]
         try:
             outcome = self._run(command, timeout=15)
         except (OSError, subprocess.TimeoutExpired, RuntimeError):
@@ -263,10 +302,24 @@ class ComposeManager:
         services = []
         for line in outcome.stdout.splitlines():
             try:
-                item = json.loads(line)
-                services.append({"name": item.get("Service") or item.get("Name") or "服务", "state": item.get("State", "unknown"), "status": item.get("Status", "")})
+                parsed = json.loads(line)
+                for item in parsed if isinstance(parsed, list) else [parsed]:
+                    services.append({"id": item.get("ID", ""), "name": item.get("Service") or item.get("Name") or "服务", "state": item.get("State", "unknown"), "status": item.get("Status", ""), "image": item.get("Image", ""), "created_at": item.get("CreatedAt", ""), "ip_addresses": [], "published_ports": [f"{port.get('URL') or '0.0.0.0'}:{port.get('PublishedPort')} → {port.get('TargetPort')}/{port.get('Protocol', 'tcp')}" for port in (item.get("Publishers") or []) if port.get("PublishedPort")]})
             except json.JSONDecodeError:
                 continue
+        ids = [s["id"] for s in services if re.fullmatch(r"[a-fA-F0-9]{12,64}", s["id"])]
+        if ids:
+            try:
+                result = self._run(["docker", "inspect", "--type", "container", *ids], timeout=15)
+                if result.returncode == 0:
+                    details = json.loads(result.stdout)
+                    for service in services:
+                        info = next((c for c in details if service["id"] and c.get("Id", "").startswith(service["id"])), {})
+                        service["created_at"] = info.get("Created") or service["created_at"]
+                        service["image"] = info.get("Config", {}).get("Image") or service["image"]
+                        service["ip_addresses"] = [address for network in (info.get("NetworkSettings", {}).get("Networks") or {}).values() for address in (network.get("IPAddress"), network.get("GlobalIPv6Address")) if address]
+            except (OSError, subprocess.TimeoutExpired, RuntimeError, json.JSONDecodeError):
+                pass  # Preserve Compose status when supplementary metadata is unavailable.
         return services
 
     def get(self, project_id: str) -> dict:
@@ -326,6 +379,28 @@ class ComposeManager:
         if outcome.returncode != 0:
             raise RuntimeError((outcome.stderr.strip() or "无法读取日志")[-1000:])
         return outcome.stdout[-200_000:]
+
+    def inspect(self, project_id: str) -> list[dict]:
+        """Read only containers belonging to this saved Compose project."""
+        directory = self._project_dir(project_id)
+        prefix = self._compose_prefix()
+        if not prefix:
+            raise RuntimeError("Docker Compose 不可用")
+        try:
+            result = self._run([*prefix, "-f", str(self._compose_file(project_id)), "ps", "--all", "--quiet"], cwd=directory, timeout=15)
+            if result.returncode:
+                raise RuntimeError((result.stderr or "无法读取项目容器")[-1000:])
+            ids = result.stdout.split()
+            if not ids:
+                return []
+            if any(not re.fullmatch(r"[a-fA-F0-9]{12,64}", item) for item in ids):
+                raise RuntimeError("Docker 返回了无效容器 ID")
+            result = self._run(["docker", "inspect", "--type", "container", *ids], timeout=20)
+            if result.returncode:
+                raise RuntimeError((result.stderr or "无法读取容器信息")[-1000:])
+            return json.loads(result.stdout)
+        except (subprocess.TimeoutExpired, OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError("容器信息读取失败，请检查 Docker 连接并重试") from exc
 
     def delete(self, project_id: str) -> None:
         with self.lock:

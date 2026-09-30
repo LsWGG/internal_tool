@@ -115,6 +115,22 @@ def configure_compose_access(payload: dict):
     return compose_manager.configure_access(bool(payload.get("use_sudo")), payload.get("sudo_password", ""))
 
 
+@app.post("/api/compose/images/check")
+def check_compose_image(payload: dict):
+    try:
+        return compose_manager.image_status(payload.get("image", ""))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/compose/images/pull")
+def pull_compose_image(payload: dict):
+    try:
+        return compose_manager.pull_image(payload.get("image", ""))
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.get("/api/compose/projects")
 def list_compose_projects():
     return compose_manager.list()
@@ -177,6 +193,16 @@ def run_compose_action(project_id: str, action: str):
 def get_compose_logs(project_id: str, service: str = "", tail: int = 200):
     try:
         return {"logs": compose_manager.logs(project_id, service, tail)}
+    except KeyError as exc:
+        raise HTTPException(404, "未找到该 Compose 项目") from exc
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/compose/projects/{project_id}/inspect")
+def inspect_compose_project(project_id: str):
+    try:
+        return {"containers": compose_manager.inspect(project_id)}
     except KeyError as exc:
         raise HTTPException(404, "未找到该 Compose 项目") from exc
     except RuntimeError as exc:
