@@ -1,0 +1,67 @@
+[
+  {
+    "name": "weekly",
+    "full_name": "ruanyf/weekly",
+    "url": "https://github.com/ruanyf/weekly",
+    "description": "科技爱好者周刊，每周五发布",
+    "description_zh": "科技爱好者周刊，每周五发布",
+    "language": "未标注",
+    "stars": "103,287",
+    "forks": "4,428",
+    "stars_today": "98",
+    "source_date": "2026-09-20",
+    "favorited_at": "2026-09-20T11:51:05.948769+08:00"
+  },
+  {
+    "name": "VoiceStudio",
+    "full_name": "debpalash/VoiceStudio",
+    "url": "https://github.com/debpalash/VoiceStudio",
+    "description": "VoiceStudio is the open-source, fully-local ElevenLabs alternative — voice cloning, voice design, video dubbing, dictation, transcription & audiobook creation in 646 languages.",
+    "description_zh": "VoiceStudio 是 ElevenLabs 的开源、完全本地化替代方案 — 提供 646 种语言的语音克隆、语音设计、视频配音、听写、转录和有声读物创建。",
+    "language": "Python",
+    "stars": "27,932",
+    "forks": "3,434",
+    "stars_today": "2,632",
+    "source_date": "2026-09-14",
+    "favorited_at": "2026-09-14T18:23:11.935846+08:00"
+  },
+  {
+    "name": "OpenMontage",
+    "full_name": "calesthio/OpenMontage",
+    "url": "https://github.com/calesthio/OpenMontage",
+    "description": "World's first open-source, agentic video production system. 12 production pipelines, 100+ tools, 700+ agent skill and production-knowledge files. Turn your AI coding assistant into a full video production studio.",
+    "description_zh": "世界上第一个开源的代理视频制作系统。 12 条生产管道、100 多种工具、700 多种代理技能和生产知识文件。将您的人工智能编码助手变成一个完整的视频制作工作室。",
+    "language": "Python",
+    "stars": "58,891",
+    "forks": "7,388",
+    "stars_today": "380",
+    "source_date": "2026-09-14",
+    "favorited_at": "2026-09-14T18:22:57.352010+08:00"
+  },
+  {
+    "name": "llm_wiki",
+    "full_name": "nashsu/llm_wiki",
+    "url": "https://github.com/nashsu/llm_wiki",
+    "description": "LLM Wiki is a cross-platform desktop application that turns your documents into an organized, interlinked knowledge base — automatically. Instead of traditional RAG (retrieve-and-answer from scratch every time), the LLM incrementally builds and maintains a persistent wiki from your sources。",
+    "description_zh": "LLM Wiki 是一个跨平台桌面应用程序，可自动将您的文档转变为有组织的、相互关联的知识库。法学硕士不是传统的 RAG（每次从头开始检索并回答），而是从您的来源逐步构建和维护持久的 wiki。",
+    "language": "TypeScript",
+    "stars": "18,132",
+    "forks": "2,099",
+    "stars_today": "142",
+    "source_date": "2026-09-11",
+    "favorited_at": "2026-09-11T14:36:48.259496+08:00"
+  },
+  {
+    "name": "awesome-gpt-image-2",
+    "full_name": "freestylefly/awesome-gpt-image-2",
+    "url": "https://github.com/freestylefly/awesome-gpt-image-2",
+    "description": "Prompt as Code | GPT Image 2 / 2.5 提示词与案例库，530+ 个案例、20+ 套工业级模板与可复用 Skills，新增 2.5 同提示词对比专区，附完整提示词与生成记录，持续更新。",
+    "description_zh": "Prompt as Code | GPT Image 2 / 2.5 提示词与案例库，530+ 个案例、20+ 套工业级模板与可复用 Skills，新增 2.5 同提示词对比专区，附完整提示词与生成记录，持续更新。",
+    "language": "JavaScript",
+    "stars": "30,857",
+    "forks": "2,989",
+    "stars_today": "962",
+    "source_date": "2026-09-11",
+    "favorited_at": "2026-09-11T14:36:23.275055+08:00"
+  }
+]
