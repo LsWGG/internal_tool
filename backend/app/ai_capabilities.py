@@ -34,7 +34,7 @@ MAP_PARAMETERS = {
 }
 
 CRAWLER_PARAMETERS = {
-    "source": {"type": "string", "enum": ["generic", "news", "twitter", "tiktok", "telegram", "youtube", "wechat"], "description": "采集流程类型。generic 仅适合逐个读取用户明确给出的独立页面；news 适合任何具有列表、排行、分类、分页并需进入详情页的网站，不限于新闻内容。"},
+    "source": {"type": "string", "enum": ["generic", "news", "twitter", "tiktok", "telegram", "youtube", "wechat", "ytdlp"], "description": "采集流程类型。generic 仅适合逐个读取用户明确给出的独立页面；news 适合任何具有列表、排行、分类、分页并需进入详情页的网站，不限于新闻内容；ytdlp 用于下载视频（任意 yt-dlp 支持的站点链接或播放列表），urls 里放视频/合集链接。"},
     "urls": {"type": "array", "items": {"type": "string", "format": "uri"}, "maxItems": 500},
     "keyword": {"type": "string", "maxLength": 1000},
     "account_name": {"type": "string", "maxLength": 300},
@@ -42,10 +42,16 @@ CRAWLER_PARAMETERS = {
     "twitter_mode": {"type": "string", "enum": ["user", "history", "keyword"]},
     "tiktok_mode": {"type": "string", "enum": ["keyword", "comments", "user", "videos"]},
     "telegram_mode": {"type": "string", "enum": ["channel", "group", "members", "search"]},
+    "ytdlp_mode": {"type": "string", "enum": ["videos", "playlist"], "description": "ytdlp 源的输入形态：videos 是逐条视频链接，playlist 是播放列表/合集/频道链接。"},
     "max_items": {"type": "integer", "minimum": -1, "maximum": 500},
     "output_format": {"type": "string", "enum": ["xlsx", "csv", "json", "jsonl", "postgresql"]},
-    "download_videos": {"type": "boolean"},
+    "download_videos": {"type": "boolean", "description": "是否下载视频/音频文件并与数据表一起打包为 ZIP。"},
     "quality": {"type": "integer", "enum": [360, 720, 1080]},
+    "download_mode": {"type": "string", "enum": ["video", "audio_mp3", "audio_m4a"], "description": "下载内容：video 是视频，audio_mp3 / audio_m4a 是仅提取音频（需要 ffmpeg）。"},
+    "subtitle_mode": {"type": "string", "enum": ["none", "sidecar", "embed"], "description": "字幕：none 不要，sidecar 存成 .vtt 单独文件，embed 嵌入视频（需要 ffmpeg，MP3 不支持）。"},
+    "thumbnail_mode": {"type": "string", "enum": ["none", "sidecar", "embed"], "description": "封面：none 不要，sidecar 存成单独图片，embed 嵌入文件（需要 ffmpeg）。"},
+    "write_metadata": {"type": "boolean", "description": "把标题、作者、上传日期写进文件元数据（需要 ffmpeg）。"},
+    "skip_downloaded": {"type": "boolean", "description": "跳过已下载过的视频，避免定时任务重复下载同一条。"},
     "interval": {"type": "integer", "enum": [-1, 0, 60, 360, 1440]},
     "cron": {"type": "string", "maxLength": 120},
 }

@@ -29,6 +29,7 @@ from .database_manager import DatabaseClient, DatabaseTaskManager
 from .propzone_manager import PropZoneTaskManager
 from .dbx_manager import DBXManager
 from .crawler_manager import CrawlerTaskManager
+from .crawler_adapters import ytdlp
 from . import crawler_douyin_login
 from .word_batch_api import make_router as make_word_batch_router
 from .clean_api import make_router as make_clean_router
@@ -311,12 +312,18 @@ def execute_ai_action(payload: dict):
             "urls": values.get("urls", []), "keyword": values.get("keyword", ""),
             "account_name": values.get("account_name", ""), "source": values.get("source", "generic"),
             "twitter_mode": values.get("twitter_mode", "keyword"), "tiktok_mode": values.get("tiktok_mode", "keyword"),
-            "telegram_mode": values.get("telegram_mode", "channel"), "fields": fields or defaults,
+            "telegram_mode": values.get("telegram_mode", "channel"),
+            "ytdlp_mode": values.get("ytdlp_mode", "videos"), "fields": fields or defaults,
             "output_format": values.get("output_format", "xlsx"), "max_items": values.get("max_items", 50),
             "interval_minutes": max(0, int(values.get("interval", 0) or 0)),
             "cron": values.get("cron", "") if values.get("interval") == -1 else "",
             "download_videos": values.get("download_videos", False),
             "youtube_quality": values.get("quality", 720), "delay_seconds": 1, "dynamic": True,
+            "download_mode": values.get("download_mode", "video"),
+            "subtitle_mode": values.get("subtitle_mode", "none"),
+            "thumbnail_mode": values.get("thumbnail_mode", "none"),
+            "write_metadata": values.get("write_metadata", False),
+            "skip_downloaded": values.get("skip_downloaded", False),
             "proxies": [], "sql_sink": {"enabled": False},
         }
         try:
@@ -1532,6 +1539,12 @@ def crawler_capabilities():
     return crawler_manager.capabilities()
 
 
+# yt-dlp 支持的站点清单很长，单独一个接口，不塞进 capabilities。
+@app.get("/api/crawler/ytdlp-sites")
+def crawler_ytdlp_sites():
+    return ytdlp.supported_sites()
+
+
 # 抖音扫码登录：拿 cookie 不要求用户会看开发者工具。没有任务归属，所以不放在任务路由里。
 @app.get("/api/crawler/douyin-login")
 def crawler_douyin_login_state():
@@ -1634,7 +1647,7 @@ def export_crawler_task(task_id: str):
         # 视频任务的结果文件本身就是 ZIP（兼容旧任务中未持久化 download_videos 标记的情况）。
         # 只要任务结果指向现存 ZIP，就直接交付该压缩包，避免回退到累计 Excel 导出。
         result_file = str(result.get("file") or "")
-        video_task = request.get("source") in ("youtube", "tiktok")
+        video_task = request.get("source") in ("youtube", "tiktok", "ytdlp")
         if not scheduled and (request.get("download_videos") or (video_task and result_file.lower().endswith(".zip"))) and result_file:
             candidate = crawler_manager.data_dir / task_id / result_file
             if candidate.is_file() and candidate.suffix.lower() == ".zip":

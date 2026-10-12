@@ -27,7 +27,8 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from .crawler_adapters import douyin, get_adapter, news, telegram, tiktok, twitter, wechat, youtube
+from .crawler_adapters import (douyin, get_adapter, news, telegram, tiktok, twitter, wechat, youtube,
+                               ytdlp)
 from .crawler_adapters.base import DiscoverContext, ManagerHttpBridge
 # 这些纯函数搬到了适配器层，管理器继续以原名使用，避免大面积改名。
 from .crawler_adapters.util import (
@@ -52,12 +53,119 @@ SOURCE_NAMES = {
     "douyin": "抖音",
     "telegram": "Telegram",
     "youtube": "YouTube 视频",
+    "ytdlp": "yt-dlp 视频",
     "wechat": "公众号文章",
 }
 
 
+def _needs_douyin_cookie(source, urls):
+    """这次请求要不要带抖音登录态。
+
+    抖音来源一直需要；yt-dlp 来源平时不需要，但用户往里贴抖音链接时，yt-dlp 的
+    DouyinIE 同样要求一份过了风控的 cookie，否则只会得到「Fresh cookies are needed」。
+    """
+    if source == "douyin":
+        return True
+    if source != "ytdlp":
+        return False
+    return any("douyin.com" in str(url) for url in (urls or []))
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat()
+
+
+# 下载器能产出的媒体后缀。兜底扫描按它认「已存在的成品文件」，所以音频模式必须把
+# 音频后缀也算进来，否则 post hook 万一带不来路径就永远找不到那个 .mp3。
+VIDEO_SUFFIXES = {".mp4", ".webm", ".mkv", ".mov", ".avi"}
+AUDIO_SUFFIXES = {".mp3", ".m4a", ".opus", ".ogg", ".flac", ".wav", ".aac"}
+MEDIA_SUFFIXES = VIDEO_SUFFIXES | AUDIO_SUFFIXES
+
+# yt-dlp 的 postprocessor 不会因为选项旗标自动生成：那套 `extractaudio` / `embedsubtitles`
+# 旗标是命令行包装层翻译的，直接调 YoutubeDL(options) 只会读 options["postprocessors"]。
+# 所以下面这一串必须自己拼。顺序是契约，不能重排（见 _media_options）。
+SUBTITLE_LANGS = ["zh-Hans", "zh-Hant", "zh", "en"]
+MEDIA_OPTION_KEYS = ("download_mode", "subtitle_mode", "thumbnail_mode",
+                     "write_metadata", "skip_downloaded")
+
+
+def media_requirements(request):
+    """这组媒体选项里，哪些是「没装 ffmpeg 就跑不了」的。
+
+    返回 (download_mode, subtitle_mode, thumbnail_mode, write_metadata, needs)。
+    只判断不报错：创建任务时据此快速失败，下载时据此决定要不要走嵌入分支。
+    """
+    download_mode = str(request.get("download_mode") or "video").lower()
+    if download_mode not in ("video", "audio_mp3", "audio_m4a"):
+        download_mode = "video"
+    subtitle_mode = str(request.get("subtitle_mode") or "none").lower()
+    if subtitle_mode not in ("none", "sidecar", "embed"):
+        subtitle_mode = "none"
+    thumbnail_mode = str(request.get("thumbnail_mode") or "none").lower()
+    if thumbnail_mode not in ("none", "sidecar", "embed"):
+        thumbnail_mode = "none"
+    # mp3 不支持嵌入字幕：FFmpegEmbedSubtitlePP 的 SUPPORTED_EXTS 里没有 mp3，命中时
+    # 只打一行 "Subtitles can only be embedded in …" 就返回 —— 静默无效，还留下旁挂字幕。
+    # 与其让它一声不吭地失败，不如在这里降级成旁挂。
+    if download_mode == "audio_mp3" and subtitle_mode == "embed":
+        subtitle_mode = "sidecar"
+    write_metadata = bool(request.get("write_metadata"))
+    if not is_ffmpeg_available():
+        # 旁挂字幕/封面走原生格式（.vtt / .webp），不调 ffmpeg，所以不列入。
+        needs = download_mode != "video" or "embed" in (subtitle_mode, thumbnail_mode) or write_metadata
+    else:
+        needs = False
+    return download_mode, subtitle_mode, thumbnail_mode, write_metadata, needs
+
+
+def is_ffmpeg_available():
+    """本机（或镜像里）有没有可用的 ffmpeg。"""
+    return bool(os.getenv("YOUTUBE_FFMPEG_PATH", "").strip() or shutil.which("ffmpeg"))
+
+
+def _sidecar_files(media_path):
+    """媒体文件旁边那些该一起打包的旁挂文件（字幕 / 封面）。
+
+    yt-dlp 让旁挂文件和媒体共用 stem：字幕是 `<stem>.<lang>.<ext>`，封面是
+    `<stem>.<webp|jpg|png>`。用 iterdir + 前缀而不是 glob —— 标题里的方括号会被
+    glob 当字符集解释。半截的 .part / .ytdl 和转码中间产物都要挡掉。
+    """
+    prefix = media_path.stem + "."
+    found = []
+    for path in sorted(media_path.parent.iterdir()):
+        if not path.is_file() or path.stat().st_size <= 0:
+            continue
+        if path.name == media_path.name or not path.name.startswith(prefix):
+            continue
+        suffix = path.suffix.lower()
+        if suffix in {".part", ".ytdl", ".tmp", ".json"} or path.name.endswith(".temp" + suffix):
+            continue
+        found.append(path)
+    return found
+
+
+def _drop_archive_entry(archive, video_id):
+    """从下载归档里删掉某条视频的记录；删到过就返回 True。
+
+    归档每行是 `<extractor> <id>`，id 是最后一个空格后的部分。
+    yt-dlp 每次构造 YoutubeDL 都会把整个归档读进内存，所以必须在重新下载**之前**删，
+    否则它会把这一行读回来继续跳过。
+    """
+    archive = Path(archive)
+    if not archive.is_file():
+        return False
+    try:
+        lines = archive.read_text("utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    kept = [line for line in lines if line.rsplit(" ", 1)[-1].strip() != video_id]
+    if len(kept) == len(lines):
+        return False
+    try:
+        archive.write_text("\n".join(kept) + ("\n" if kept else ""), "utf-8")
+    except OSError:
+        return False
+    return True
 
 
 class CrawlerTaskManager:
@@ -508,6 +616,9 @@ class CrawlerTaskManager:
         telegram_mode = str(payload.get("telegram_mode") or "channel").strip().lower()
         if telegram_mode not in ("channel", "group", "members", "search"):
             telegram_mode = "channel"
+        ytdlp_mode = str(payload.get("ytdlp_mode") or "videos").strip().lower()
+        if ytdlp_mode not in ("videos", "playlist"):
+            ytdlp_mode = "videos"
         if source == "wechat" and not account_name and not urls:
             raise ValueError("请输入公众号名称或微信文章链接")
         if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") and not keyword:
@@ -533,12 +644,13 @@ class CrawlerTaskManager:
             fields = self.builtin_fields(source, twitter_mode, tiktok_mode, telegram_mode, youtube_mode)
         proxies = [str(x).strip() for x in (payload.get("proxies") or []) if str(x).strip()]
         douyin_cookie = str(payload.get("douyin_cookie") or "").strip()
-        if source == "douyin" and not douyin_cookie:
+        if _needs_douyin_cookie(source, urls) and not douyin_cookie:
             douyin_cookie = self._saved_douyin_cookie()
         fmt = payload.get("output_format", "json")
         if fmt not in ("json", "csv", "xlsx", "jsonl", "postgresql", "video_zip"):
             fmt = "json"
-        download_videos = bool(payload.get("download_videos", fmt == "video_zip"))
+        # yt-dlp 源就是下载器：没显式关掉时默认下载视频文件。
+        download_videos = bool(payload.get("download_videos", fmt == "video_zip" or source == "ytdlp"))
         if fmt == "video_zip":
             fmt = "xlsx"
         interval = max(0, int(payload.get("interval_minutes") or 0))
@@ -563,6 +675,17 @@ class CrawlerTaskManager:
         youtube_quality = int(payload.get("youtube_quality") or 720)
         if youtube_quality not in (360, 720, 1080):
             youtube_quality = 720
+        # 媒体选项只在真要下文件时才有意义；勾掉下载时统一落到默认值，
+        # 免得任务记录里留一组永远不会生效的选项。
+        media_request = dict(payload) if download_videos else {}
+        download_mode, subtitle_mode, thumbnail_mode, write_metadata, needs_ffmpeg = \
+            media_requirements(media_request)
+        if needs_ffmpeg:
+            raise ValueError(
+                "所选的下载选项需要 ffmpeg（提取音频 / 嵌入字幕 / 嵌入封面 / 写入元数据），"
+                "当前环境未安装。请安装 ffmpeg 或配置 YOUTUBE_FFMPEG_PATH 后重试；"
+                "改用「单独文件」形式的字幕和封面则不需要 ffmpeg。"
+            )
         label_target = keyword if source in ("twitter", "youtube", "tiktok", "douyin", "telegram") else (account_name if source == "wechat" and account_name else (urlparse(urls[0]).netloc if urls else ""))
         twitter_label = {"user": "X 用户信息", "history": "X 历史推文", "keyword": "X 关键词推文"}.get(twitter_mode)
         tiktok_label = {"keyword": "TikTok 关键词视频", "comments": "TikTok 视频评论", "user": "TikTok 账号信息", "videos": "TikTok 账号视频"}.get(tiktok_mode)
@@ -583,12 +706,18 @@ class CrawlerTaskManager:
                               "tiktok_mode": tiktok_mode,
                               "youtube_mode": youtube_mode,
                               "telegram_mode": telegram_mode,
+                              "ytdlp_mode": ytdlp_mode,
                               "telegram_api_id": str(payload.get("telegram_api_id") or "").strip(),
                               "telegram_api_hash": str(payload.get("telegram_api_hash") or "").strip(),
                               "telegram_session": str(payload.get("telegram_session") or "").strip(),
                               "persistent": max_items == -1,
                               "download_videos": download_videos,
                               "youtube_quality": youtube_quality,
+                              "download_mode": download_mode,
+                              "subtitle_mode": subtitle_mode,
+                              "thumbnail_mode": thumbnail_mode,
+                              "write_metadata": write_metadata,
+                              "skip_downloaded": bool(payload.get("skip_downloaded")) if download_videos else False,
                               "article_link_selector": str(payload.get("article_link_selector") or "").strip(),
                               "next_page_selector": str(payload.get("next_page_selector") or "").strip()},
                   "result": None, "runs": []}
@@ -764,6 +893,11 @@ class CrawlerTaskManager:
                 "twitter_mode": "public_index_oembed",
                 "tiktok": True, "tiktok_token_required": False,
                 "tiktok_modes": ["keyword", "comments", "user", "videos"],
+                "ytdlp": True, "ytdlp_modes": ["videos", "playlist"],
+                # 提取音频 / 嵌入字幕 / 嵌入封面 / 写元数据都要 ffmpeg；旁挂形式不用。
+                # 前端据此禁用那些选项，而不是等创建任务时才弹一句报错。
+                "ffmpeg": is_ffmpeg_available(),
+                "download_modes": ["video", "audio_mp3", "audio_m4a"],
                 "telegram": True, "telegram_modes": ["channel", "group", "members", "search"],
                 "telegram_api_configured": bool(os.getenv("TELEGRAM_API_ID") and os.getenv("TELEGRAM_API_HASH") and os.getenv("TELEGRAM_SESSION"))}
 
@@ -871,6 +1005,8 @@ class CrawlerTaskManager:
         with browser_scope(None, request.get("proxies")) as preview_browser:
             if source == "twitter":
                 raise ValueError("X 数据通过公开索引和官方嵌入页面返回固定字段，无需网页点选")
+            if source == "ytdlp":
+                raise ValueError("yt-dlp 视频由解析器返回固定字段，无需网页点选")
             if source == "youtube":
                 if not keyword:
                     raise ValueError("请先输入 YouTube 搜索关键词")
@@ -1031,7 +1167,7 @@ class CrawlerTaskManager:
         # 预览只用于确认字段和展现形式，最多读取三条，避免误触发大批量采集。
         sample_size = min(3, max(1, int(payload.get("sample_size") or 3)))
         douyin_cookie = str(payload.get("douyin_cookie") or "").strip()
-        if source == "douyin" and not douyin_cookie:
+        if _needs_douyin_cookie(source, urls) and not douyin_cookie:
             douyin_cookie = self._saved_douyin_cookie()
         request = {
             "source": source, "urls": urls, "keyword": keyword, "account_name": account_name,
@@ -1039,6 +1175,7 @@ class CrawlerTaskManager:
             "tiktok_mode": str(payload.get("tiktok_mode") or "keyword"),
             "youtube_mode": str(payload.get("youtube_mode") or "keyword"),
             "telegram_mode": str(payload.get("telegram_mode") or "channel"),
+            "ytdlp_mode": str(payload.get("ytdlp_mode") or "videos"),
             "telegram_api_id": str(payload.get("telegram_api_id") or "").strip(),
             "telegram_api_hash": str(payload.get("telegram_api_hash") or "").strip(),
             "telegram_session": str(payload.get("telegram_session") or "").strip(),
@@ -1078,6 +1215,8 @@ class CrawlerTaskManager:
             raise ValueError(message)
         if source == "wechat" and not account_name and not urls:
             raise ValueError("请先输入公众号名称或文章链接")
+        if source == "ytdlp" and not urls:
+            raise ValueError("请先输入视频或播放列表链接")
         if source not in ("twitter", "youtube", "tiktok", "douyin", "telegram", "wechat") and not urls:
             raise ValueError("请先输入网页或新闻列表页地址")
 
@@ -1113,6 +1252,10 @@ class CrawlerTaskManager:
                         raise
             elif source == "telegram":
                 targets = self._discover_telegram_data(keyword, request)[:sample_size]
+            elif source == "ytdlp":
+                # 视频源没有可点选的 DOM，预览直接给 yt-dlp 解析出的元数据行。
+                targets = ytdlp.preview_targets(
+                    request, ytdlp.resolve_targets(request, urls, sample_size), sample_size)
             else:
                 targets = urls[:sample_size]
 
@@ -1148,6 +1291,8 @@ class CrawlerTaskManager:
         if source == "twitter":
             mode = "social"
         elif source == "youtube" and selected.intersection({"title", "description", "thumbnail", "url"}):
+            mode = "video"
+        elif source == "ytdlp" and selected.intersection({"title", "description", "thumbnail", "url"}):
             mode = "video"
         elif source == "twitter" and selected.intersection({"text", "media", "author", "url"}):
             mode = "social"
@@ -1316,7 +1461,13 @@ class CrawlerTaskManager:
 
         quality = int(request.get("youtube_quality") or 720)
         ffmpeg_path = os.getenv("YOUTUBE_FFMPEG_PATH", "").strip() or shutil.which("ffmpeg")
-        if ffmpeg_path:
+        download_mode, subtitle_mode, thumbnail_mode, write_metadata, _ = media_requirements(request)
+        skip_downloaded = bool(request.get("skip_downloaded"))
+        if download_mode == "audio_mp3":
+            format_selector = "bestaudio/best"
+        elif download_mode == "audio_m4a":
+            format_selector = "bestaudio[ext=m4a]/bestaudio/best"
+        elif ffmpeg_path:
             format_selector = (
                 f"bestvideo[height<={quality}][ext=mp4]+bestaudio[ext=m4a]/"
                 f"best[height<={quality}][ext=mp4]/best[height<={quality}]/best"
@@ -1325,6 +1476,7 @@ class CrawlerTaskManager:
             format_selector = f"best[height<={quality}][ext=mp4]/best[height<={quality}]/best"
 
         videos_dir.mkdir(parents=True, exist_ok=True)
+        expected_suffixes = VIDEO_SUFFIXES if download_mode == "video" else {f".{download_mode.split('_', 1)[1]}"}
         last_update = [0.0]
 
         def progress_hook(status):
@@ -1361,6 +1513,39 @@ class CrawlerTaskManager:
             "windowsfilenames": True,
             "progress_hooks": [progress_hook],
         }
+        if subtitle_mode != "none":
+            # 嵌入模式也得开这两个旗标：FFmpegEmbedSubtitlePP 读的是
+            # info['requested_subtitles'][lang]['filepath']，而那个字段只在写了字幕文件之后才有。
+            # subtitlesformat 取原生 vtt，不转码，所以旁挂这条路不需要 ffmpeg。
+            options.update(writesubtitles=True, writeautomaticsub=True,
+                           subtitleslangs=list(SUBTITLE_LANGS),
+                           subtitlesformat="vtt/srt/best")
+        if thumbnail_mode != "none":
+            options["writethumbnail"] = True  # EmbedThumbnailPP 同样依赖封面先落盘
+        if skip_downloaded:
+            # 归档放在 videos/ 里而不是 task_dir 根下：这样它的寿命处处和媒体文件一致 ——
+            # retry 清扫时 YouTube 保留 videos/ 就一并保留归档，其余来源两者一起删，
+            # 不必再去动 preserved 白名单。
+            options["download_archive"] = str(videos_dir / "download_archive.txt")
+        # postprocessor 的顺序是契约（命令行包装层就是这个顺序），不能重排：
+        # 提取音频必须最先，它会改写 info['filepath']；元数据要在嵌入之后，容器才定型；
+        # 嵌入封面最后，它那趟 ffmpeg 流拷贝才不会把前面写进去的东西冲掉。
+        postprocessors = []
+        if download_mode == "audio_mp3":
+            postprocessors.append({"key": "FFmpegExtractAudio",
+                                   "preferredcodec": "mp3", "preferredquality": "192"})
+        elif download_mode == "audio_m4a":
+            postprocessors.append({"key": "FFmpegExtractAudio", "preferredcodec": "m4a"})
+        if subtitle_mode == "embed":
+            postprocessors.append({"key": "FFmpegEmbedSubtitle", "already_have_subtitle": False})
+        if write_metadata:
+            # add_infojson=False：否则会蹭出一个 .info.json，还只在 mkv 容器里生效并报一堆噪音。
+            postprocessors.append({"key": "FFmpegMetadata", "add_metadata": True,
+                                   "add_chapters": False, "add_infojson": False})
+        if thumbnail_mode == "embed":
+            postprocessors.append({"key": "EmbedThumbnail", "already_have_thumbnail": False})
+        if postprocessors:
+            options["postprocessors"] = postprocessors
         # 优先使用项目安装的 Deno，服务进程的 PATH 可能与终端不同。
         deno = Path(sys.executable).parent / ("deno.exe" if os.name == "nt" else "deno")
         deno_path = str(deno) if deno.is_file() else shutil.which("deno")
@@ -1383,8 +1568,11 @@ class CrawlerTaskManager:
         options["logger"] = DownloadLogger()
         completed_paths = []
         options["post_hooks"] = [completed_paths.append]
-        if ffmpeg_path:
+        if ffmpeg_path and download_mode == "video":
+            # 只在视频模式合并到 mp4：音频模式下留这个键会把音频容器也往 mp4 上掰。
             options.update(merge_output_format="mp4", ffmpeg_location=ffmpeg_path)
+        elif ffmpeg_path:
+            options["ffmpeg_location"] = ffmpeg_path
         proxies = request.get("proxies") or []
         if proxies:
             proxy = str(proxies[(index - 1) % len(proxies)]).strip()
@@ -1392,6 +1580,17 @@ class CrawlerTaskManager:
         cookies_file = os.getenv("YOUTUBE_COOKIES_FILE", "").strip()
         if cookies_file:
             options["cookiefile"] = cookies_file
+        # 抖音链接走 yt-dlp 时要带扫码登录存的会话；它必须进 cookie jar，
+        # 光给 http_headers 是没用的（DouyinIE 读 jar）。
+        douyin_cookie = str(request.get("douyin_cookie") or "").strip()
+        use_douyin_cookies = bool(douyin_cookie) and "douyin.com" in url
+
+        def attempt_download():
+            """跑一次完整的解析 + 下载，返回 info；失败时抛出 DownloadError。"""
+            with yt_dlp.YoutubeDL(options) as downloader:
+                if use_douyin_cookies:
+                    ytdlp.install_cookies(downloader, douyin_cookie)
+                return downloader.extract_info(url, download=True)
 
         for attempt in range(3):
             self._checkpoint(task_id)
@@ -1399,8 +1598,7 @@ class CrawlerTaskManager:
             warnings.clear()
             try:
                 # 重新解析页面以刷新签名及播放地址，不能仅重试同一个失效的媒体 URL。
-                with yt_dlp.YoutubeDL(options) as downloader:
-                    info = downloader.extract_info(url, download=True)
+                info = attempt_download()
                 break
             except yt_dlp.utils.DownloadError as exc:
                 self._checkpoint(task_id)
@@ -1422,20 +1620,55 @@ class CrawlerTaskManager:
                 for _ in range((attempt + 1) * 10):
                     self._checkpoint(task_id)
                     time.sleep(.2)
+        info = info or {}
         # 只接受下载器完成合并后的文件，避免把残留的音频或视频分轨误打包。
         candidates = [Path(path) for path in completed_paths
                       if isinstance(path, (str, os.PathLike)) and Path(path).is_file()
                       and Path(path).stat().st_size > 0]
+
+        # 归档命中时 process_video_result 会提前返回：不下载、不跑 postprocessor，
+        # 于是 post_hooks 一次都不触发，completed_paths 是空的。紧接着那条「扫描输出目录」
+        # 的兜底逻辑就会从 videos/ 里随便挑一个已存在的文件 —— 把别人的视频挂到这一行上。
+        # 所以命中归档必须先按视频 id 找回自己的那个文件，绝不能落到兜底扫描。
+        info_id = str(info.get("id") or "").strip()
+
+        def id_scoped_files():
+            if not info_id:
+                return []
+            # 用 iterdir + 子串匹配而不是 glob：windowsfilenames 不清洗 [ ]，
+            # 而标题里带方括号很常见，glob 会把它们当字符集解释。
+            return [path for path in videos_dir.iterdir()
+                    if path.is_file() and path.stat().st_size > 0
+                    and f"_{info_id}_" in path.name
+                    and path.suffix.lower() in expected_suffixes
+                    and not re.search(r"\.[a-z]\d+\.", path.name, re.I)]
+
+        if not candidates and info_id:
+            candidates = id_scoped_files()
+        if not candidates and info_id and skip_downloaded:
+            # 归档说「下过了」，但这个模式下找不到可用文件（模式换过、文件被删过）。
+            # 删掉那一行再重下一次，否则 yt-dlp 会照着归档又跳过一遍。
+            archive = videos_dir / "download_archive.txt"
+            if _drop_archive_entry(archive, info_id):
+                completed_paths.clear()
+                warnings.clear()
+                try:
+                    info = attempt_download() or info
+                except yt_dlp.utils.DownloadError as exc:
+                    raise RuntimeError(clean_error(exc)) from exc
+                candidates = [Path(path) for path in completed_paths
+                              if isinstance(path, (str, os.PathLike)) and Path(path).is_file()
+                              and Path(path).stat().st_size > 0] or id_scoped_files()
         # yt-dlp post hook 在不同版本可能传入 info dict 而非文件路径，
-        # 因此同时从输出目录扫描最终媒体文件，避免误报“未生成完整文件”。
-        if not candidates:
+        # 因此对「连 id 都拿不到」的情况仍保留一次输出目录扫描。
+        if not candidates and not info_id:
             candidates = [path for path in videos_dir.iterdir()
                           if path.is_file() and path.stat().st_size > 0
-                          and path.suffix.lower() in {".mp4", ".webm", ".mkv", ".mov", ".avi"}
+                          and path.suffix.lower() in MEDIA_SUFFIXES
                           and not re.search(r"\.[a-z]\d+\.", path.name, re.I)]
         if not candidates:
             raise RuntimeError("视频下载未生成完整文件，请重试")
-        return info or {}, candidates[-1]
+        return info, candidates[-1]
 
     @staticmethod
     def _fill_youtube_row(row, info):
@@ -1492,10 +1725,10 @@ class CrawlerTaskManager:
         rows, errors = [], []
         try:
             source = request.get("source", "generic")
-            download_videos = bool(request.get("download_videos", True)) and ((source == "youtube" and request.get("youtube_mode", "keyword") in ("keyword", "videos")) or (source in ("tiktok", "douyin") and request.get("tiktok_mode") in ("keyword", "videos")))
+            download_videos = bool(request.get("download_videos", True)) and (source == "ytdlp" or (source == "youtube" and request.get("youtube_mode", "keyword") in ("keyword", "videos")) or (source in ("tiktok", "douyin") and request.get("tiktok_mode") in ("keyword", "videos")))
             videos_dir = task_dir / "videos" if download_videos else None
             unit = {"news": "篇新闻", "wechat": "篇文章", "youtube": "个视频",
-                    "twitter": "条推文", "tiktok": "个视频", "telegram": "条消息"}.get(source, "个网页")
+                    "ytdlp": "个视频", "twitter": "条推文", "tiktok": "个视频", "telegram": "条消息"}.get(source, "个网页")
             if source == "twitter" and request.get("twitter_mode") == "user":
                 unit = "个用户"
             if source in ("tiktok", "douyin"):
@@ -1530,6 +1763,9 @@ class CrawlerTaskManager:
             elif source in ("twitter", "tiktok", "douyin", "telegram"):
                 urls = self._discover_for(source, request.get("keyword", ""), request, task_id,
                                           run_browser)
+            elif source == "ytdlp":
+                # 链接就在 request["urls"] 里；播放列表模式由适配器展开成单条视频。
+                urls = self._discover_for(source, "", request, task_id, run_browser)
             else:
                 urls = request.get("urls", [])
             if source != "generic":
@@ -1661,17 +1897,29 @@ class CrawlerTaskManager:
                     (task_dir / "download_errors.json").write_text(
                         json.dumps(errors, ensure_ascii=False, indent=2), "utf-8"
                     )
-                archive = task_dir / ("youtube_videos.zip" if source == "youtube" else "tiktok_videos.zip")
+                archive = task_dir / {"youtube": "youtube_videos.zip", "tiktok": "tiktok_videos.zip",
+                                      "douyin": "tiktok_videos.zip"}.get(source, "videos.zip")
                 with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as package:
                     package.write(output, output.name)
                     packaged = set()
+                    media_count = 0
                     for row in rows:
                         relative = str(row.get("video_file") or "")
                         video_path = task_dir / relative
                         if relative and relative not in packaged and video_path.is_file():
                             package.write(video_path, relative)
                             packaged.add(relative)
-                    video_count = len(packaged)
+                            media_count += 1
+                            # 字幕和封面是旁挂文件，和媒体文件共用 stem（`<stem>.en.vtt`、
+                            # `<stem>.webp`），按前缀捞进来一起打包。行结构不变，只是包里多了文件。
+                            for sibling in _sidecar_files(video_path):
+                                name = f"{video_path.parent.name}/{sibling.name}"
+                                if name not in packaged:
+                                    package.write(sibling, name)
+                                    packaged.add(name)
+                    # 只数媒体文件：packaged 里现在还混着字幕、封面这些旁挂文件，
+                    # 拿它当视频数会把「3 个视频」报成「11 个」。
+                    video_count = media_count
                     if errors:
                         package.write(task_dir / "download_errors.json", "download_errors.json")
                 result_file = archive.name

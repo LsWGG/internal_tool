@@ -226,7 +226,9 @@ main.ui-shell.is-portal{max-width:none;padding:0;height:100dvh;overflow:hidden}
 .ui-shell .database-studio .database-client{min-height:var(--ui-stage-height)}
 .ui-shell :is(.es-connection,.database-connection){border-color:var(--ui-border);border-radius:var(--ui-panel-radius);box-shadow:0 5px 18px rgba(48,75,112,.045)}
 .ui-shell .es-connection{margin-bottom:calc(14px * var(--ui-scale));padding:calc(20px * var(--ui-scale)) calc(24px * var(--ui-scale))}
-.ui-shell .crawler-workspace{border:0!important;border-radius:0!important;background:transparent!important;box-shadow:none!important;overflow:visible!important}
+/* 采集工作区同样套 pop-art 外框，与 PDF 工具箱等页面一致。
+   overflow 必须保持 visible：悬浮 AI 按钮和下拉层要能溢出这个框。 */
+.ui-shell .crawler-workspace{border:2px solid var(--pop-ink)!important;border-radius:3px!important;background:var(--pop-paper)!important;box-shadow:var(--pop-shadow)!important;overflow:visible!important;padding:26px 28px}
 .ui-shell .crawler-page .crawler-config{padding:0!important;background:transparent!important}
 .ui-shell .crawler-page{background:transparent!important}
 .ui-shell .crawler-page .crawler-workspace,.ui-shell .crawler-page .crawler-config{background:transparent!important}

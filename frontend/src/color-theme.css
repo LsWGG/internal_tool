@@ -36,7 +36,9 @@ html[data-theme=dark] #app .ui-shell :is(.terminal-art pre,.es-help pre){backgro
 html[data-theme=dark] #app .ui-shell :is(.terminal-art>span,.wb-examples a){color:#a9d9ff!important}
 html[data-theme=dark] #app .ui-shell :is(.wb-file-control em,.wb-preview-head small){color:#b9c9da!important}
 html[data-theme=dark] #app .ui-shell .wb-file-control b{background:#83d9e7!important;color:#17232a!important}
-html[data-theme=dark] #app .ui-shell :is(.crawler-analyze,.crawler-finish,.crawler-discovery-box,.crawler-douyin-login,.crawler-options,.crawler-cron,.crawler-sql-config,.crawler-advanced,.crawler-picker){background:#25343f!important;color:#cedbe7!important;border-color:#526b7a!important}
+html[data-theme=dark] #app .ui-shell :is(.crawler-analyze,.crawler-finish,.crawler-discovery-box,.crawler-douyin-login,.crawler-options,.crawler-cron,.crawler-sql-config,.crawler-advanced,.crawler-picker,.crawler-media,.crawler-media-check){background:#25343f!important;color:#cedbe7!important;border-color:#526b7a!important}
+/* 勾选态要压过上面那条同特指度的深色底（它带 !important，只能也用 !important 并排在后面）。 */
+html[data-theme=dark] #app .ui-shell .crawler-media-check:has(input:checked){background:#203e32!important;border-color:#659c7d!important}
 html[data-theme=dark] #app .ui-shell :is(.crawler-progress span,.crawler-advanced summary,.crawler-advanced summary small){color:#c8d6e5!important}
 html[data-theme=dark] #app .ui-shell :is(.crawler-progress i,.clean-step-pill i,.clean-step-no){background:#344456!important;color:#e9edf3!important;border-color:#718399!important}
 html[data-theme=dark] #app .ui-shell :is(.crawler-simple-fields label.active,.layer-catalog article.active,.local-layer-list article.active,.metadata-file.active){background:#234652!important;color:#d1f4fa!important;border-color:#83d9e7!important}

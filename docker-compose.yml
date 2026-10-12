@@ -1,0 +1,64 @@
+services:
+  backend:
+    image: internal_tool-backend:offline
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend-data:/app/backend/data
+      - backend-docker-data:/app/backend/docker_data
+      - backend-compose-data:/app/backend/compose_data
+      - backend-crawler-data:/app/backend/crawler_data
+      - backend-database-data:/app/backend/database_data
+      - backend-clean-data:/app/backend/clean_data
+      - backend-pdf-data:/app/backend/pdf_data
+      - backend-image-data:/app/backend/image_convert_data
+      - backend-gjb-data:/app/backend/gjb_data
+      - backend-es-data:/app/backend/es_data
+      - backend-nebula-data:/app/backend/nebula_data
+      - backend-md-word-data:/app/backend/md_word_data
+      - backend-mermaid-data:/app/backend/mermaid_data
+      - backend-propzone-data:/app/backend/propzone_data
+      - backend-shp-data:/app/backend/shp_preview_data
+      - backend-tile-data:/app/backend/tile_preview_data
+      - backend-word-batch-data:/app/backend/word_batch_data
+      - backend-db-data:/app/backend/dbx_data
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  frontend:
+    image: nginx:1.27-alpine
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+    # 先在宿主机执行 `npm run build`，这里只挂载构建产物。
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped
+
+volumes:
+  backend-data:
+  backend-docker-data:
+  backend-compose-data:
+  backend-crawler-data:
+  backend-database-data:
+  backend-clean-data:
+  backend-pdf-data:
+  backend-image-data:
+  backend-gjb-data:
+  backend-es-data:
+  backend-nebula-data:
+  backend-md-word-data:
+  backend-mermaid-data:
+  backend-propzone-data:
+  backend-shp-data:
+  backend-tile-data:
+  backend-word-batch-data:
+  backend-db-data:

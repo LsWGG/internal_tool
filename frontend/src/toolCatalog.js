@@ -30,7 +30,7 @@ export const toolGroups=[
   ]},
   {id:'collection',name:'采集与资讯',english:'COLLECTION & INSIGHTS',description:'采集公开内容，跟踪开源项目动态。',icon:'trend',tools:[
     {id:'crawler',name:'智能网页采集',tag:'公开内容采集',description:'按数据源配置新闻、公众号、视频和社交内容采集任务。',keywords:'爬虫 新闻 微信 youtube 推特 twitter x',icon:'layers'},
-    {id:'trending',name:'GitHub 每日热门榜单',tag:'技术趋势',description:'查看热门仓库、中文简介及近 7 天历史报告。',keywords:'github trending 热门 开源 历史 翻译',icon:'trend'},
+    {id:'trending',name:'GitHub 每日热门榜单',tag:'技术趋势',description:'查看热门仓库、中文简介及近 15 天历史报告。',keywords:'github trending 热门 开源 历史 翻译',icon:'trend'},
   ]},
   {id:'delivery',name:'开发交付',english:'DEVELOPMENT & DELIVERY',description:'为离线部署准备软件安装包。',icon:'package',tools:[
     {id:'json',name:'JSON 解析工具',tag:'解析与对比',description:'上传或粘贴 JSON，格式化、树形浏览、JSONPath 查询、格式转换与双栏差异对比。',keywords:'json jsonpath yaml csv jsonl 格式化 解析 对比 树形',icon:'data'},

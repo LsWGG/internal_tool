@@ -14,6 +14,8 @@ BUILTIN_FIELDS = {
     "douyin": ["title", "description", "author", "username", "published_at", "duration", "views", "likes", "comments", "shares", "thumbnail", "url"],
     "telegram": ["message_id", "text", "author", "published_at", "views", "forwards", "replies", "media", "chat", "url"],
     "youtube": ["title", "description", "channel", "published_at", "duration", "views", "likes", "thumbnail", "url"],
+    # 与 YouTube 同列：下载路径共用 youtube.fill_row，跨站点也只有一套表头。
+    "ytdlp": ["title", "description", "channel", "published_at", "duration", "views", "likes", "thumbnail", "url"],
     "wechat": ["title", "author", "published_at", "content", "image", "account", "url"],
 }
 

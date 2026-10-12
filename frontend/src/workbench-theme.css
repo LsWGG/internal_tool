@@ -107,7 +107,9 @@
 :root .ui-shell .metadata-page :is(button:not(.md-primary),.metadata-tag-combobox){border-radius:3px}
 
 /* Collection wizard: repeated step cards and secondary modes share one hierarchy. */
-:root .ui-shell .crawler-config>:is(.crawler-step,.crawler-url-step,.crawler-wechat-target,.crawler-fields,.crawler-finish,.crawler-picker,.crawler-analyze,.crawler-discovery-box,.crawler-douyin-login,.crawler-advanced){border:1px solid var(--pop-line);border-radius:3px;background:var(--pop-paper);box-shadow:none}
+/* 步骤卡片拉齐 pop-art：与 PDF 工具箱等页面的卡片同为「2px 墨色描边 + 硬投影」。
+   这里 1px 灰描边 + 无投影曾经是采集页与全站唯一的样式分歧点。 */
+:root .ui-shell .crawler-config>:is(.crawler-step,.crawler-url-step,.crawler-wechat-target,.crawler-fields,.crawler-finish,.crawler-picker,.crawler-analyze,.crawler-discovery-box,.crawler-douyin-login,.crawler-advanced){border:2px solid var(--pop-ink);border-radius:3px;background:var(--pop-paper);box-shadow:var(--pop-shadow)}
 :root .ui-shell .crawler-config>.crawler-finish{background:#fff8d6}
 :root .ui-shell .crawler-config>.crawler-analyze{background:#e8f8fa}
 :root .ui-shell .crawler-progress{background:var(--pop-soft);border-color:var(--pop-line);border-radius:3px}
@@ -263,9 +265,17 @@
 :root .ui-shell .crawler-fields-tip{display:block;margin:14px 0 0}
 :root .ui-shell .crawler-simple-fields label{min-height:40px;gap:8px}
 :root .ui-shell .crawler-simple-fields label.active{background:#fff7cf;border-color:#a89c62}
-:root .ui-shell .crawler-config>.crawler-finish{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px 20px;padding:20px 22px;background:var(--pop-paper)}
+/* 4 列。原来 3 列时「保存为」只占 1 列、右边空 2 格，而下载总开关却占 2 列 ——
+   一个子选项和输出格式平起平坐，父子关系完全看不出来。改成 4 列后
+   「保存为」「执行时间」各占 2 列并排（都是任务级设置，与下载无关），
+   下载媒体块独占整行，从属关系一眼可见。 */
+:root .ui-shell .crawler-config>.crawler-finish{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 20px;padding:20px 22px;background:var(--pop-paper)}
 :root .ui-shell .crawler-finish>b,:root .ui-shell .crawler-finish>.crawler-sql-config{grid-column:1/-1}
+/* 「最多采集」是个小数字框，跟「保存为」同宽即可，别拉满整行。 */
+:root .ui-shell .crawler-finish>.crawler-generic-limit{grid-column:span 2}
 :root .ui-shell .crawler-finish>.grid2{display:contents}
+/* .grid2 里只剩这两个任务级字段，各占 2 列并排。 */
+:root .ui-shell .crawler-finish>.grid2>label{grid-column:span 2}
 :root .ui-shell .crawler-finish .crawler-cron{grid-column:1/-1}
 :root .ui-shell .crawler-finish label{display:flex;flex-direction:column;gap:8px;align-self:start;font-size:var(--fs-12);color:var(--pop-ink)}
 :root .ui-shell .crawler-finish input{margin:0}
@@ -295,10 +305,51 @@
  :root .ui-shell .crawler-analyze>div button{flex-basis:140px}
  :root .ui-shell :is(.terminal-art,.es-help) pre{padding:14px;font-size:var(--fs-12)}
 }
-:root .ui-shell .crawler-finish>.crawler-generic-limit{grid-column:auto}
 :root .ui-shell .crawler-page .crawler-config>:is(.crawler-summary,.crawler-data-preview,.crawler-picker,.crawler-advanced){border-radius:3px}
 
-:root .ui-shell .crawler-finish .crawler-download-toggle{border:1px solid var(--pop-line);border-radius:3px;background:#fff8dc;padding:12px}
+/* 下载媒体：块头是总开关，下面接字段行和勾选行。
+   .grid2 是 display:contents（见上面 276 行），所以这一块直接是 .crawler-finish 的网格项，
+   用后代选择器而不是 >（DOM 上它还在 .grid2 里）。 */
+:root .ui-shell .crawler-finish .crawler-media{grid-column:1/-1;display:flex;flex-direction:column;gap:14px;padding:16px 18px;border:1px solid var(--pop-line);border-radius:3px;background:#fbfdff}
+/* 字段行用 flex 而不是固定列数的网格：视频模式 4 个、纯音频模式 3 个（少一个「视频清晰度」），
+   写死 4 列的话 MP3 那一行会在右边空出一格；flex:1 1 240px 让几个字段总是把整行匀满，
+   顺带窄屏也不必再单独写断点 —— 装不下就自己换行。 */
+:root .ui-shell .crawler-media>.crawler-media-fields{display:flex;flex-wrap:wrap;gap:14px 20px}
+:root .ui-shell .crawler-media>.crawler-media-fields>label{flex:1 1 240px;min-width:0}
+/* 总开关是这个块的块头，不再是「保存为」旁边的同级方块：
+   之前它和输出格式平排一行，而它所管辖的 6 个控件在后面另一块里，父子关系看不出来。 */
+:root .ui-shell .crawler-media>.crawler-media-head{align-self:stretch;flex-direction:row;align-items:center;justify-content:flex-start;gap:14px;font-weight:600}
+:root .ui-shell .crawler-media>.crawler-media-head>span{display:flex;align-items:center;gap:7px;white-space:nowrap}
+:root .ui-shell .crawler-media>.crawler-media-head small{margin:0;color:var(--pop-muted);font-weight:400}
+/* 勾上之后才出现的那一坨，用一条细线跟块头分开。 */
+:root .ui-shell .crawler-media>.crawler-media-head:has(input:checked){padding-bottom:13px;border-bottom:1px solid var(--pop-line)}
+/* 两个勾选项单独占一行、各自一个方框，因为它们和上面四组「标题 + 下拉框」不是同一类控件：
+   混在网格里时，它们会和「下载内容/字幕/封面图」的标签排在同一水平线上，而它们的说明文字
+   又落在下拉框那一行，读起来像是一个没有控件的孤立标签。另外它们在视频/MP3 两种模式下
+   会换列，位置飘。收成固定的一行两格后位置稳定，也终于长得像能点的东西。 */
+:root .ui-shell .crawler-media .crawler-media-flags{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+:root .ui-shell .crawler-media .crawler-media-check{align-self:stretch;justify-content:center;gap:3px;padding:10px 12px;border:1px solid var(--pop-line);border-radius:3px;background:white;cursor:pointer}
+:root .ui-shell .crawler-media .crawler-media-check:hover{border-color:var(--pop-ink)}
+/* 勾选后整块变底色 —— 13px 的方框太细，看不出这一项是否生效。 */
+:root .ui-shell .crawler-media .crawler-media-check:has(input:checked){background:var(--ui-success-soft);border-color:#8db79b}
+:root .ui-shell .crawler-media .crawler-media-check>span{display:flex;align-items:center;gap:7px;white-space:nowrap;font-weight:600}
+/* 这一页的根节点同时带着 .panel（ASIDE.panel.crawler-config），于是
+   style.css 的 `.panel .grid2 input{display:block;width:100%}` 会命中这里的复选框，
+   把它撑到整格宽、顺带把文字挤到第二行。 */
+:root .ui-shell .crawler-media .crawler-media-check input{width:auto;min-width:0;flex:0 0 auto}
+/* 说明文字缩进到标题文字下方（方框 13px + 间距 7px），而不是吊在方框左边。 */
+:root .ui-shell .crawler-media .crawler-media-check small{margin:0;padding-left:20px;line-height:1.5}
+
+/* 窄屏的覆盖必须写在上面这些基础规则之后：选择器特指度相同（都是 :root .ui-shell …），
+   靠文档顺序决胜。放进上面 299 行那个 @media 块里会被后面的基础规则反超，静默失效。 */
+@media(max-width:760px){
+ :root .ui-shell .crawler-finish .crawler-media{padding:13px}
+ :root .ui-shell .crawler-media>.crawler-media-head{flex-direction:column;align-items:flex-start;gap:4px}
+}
+/* 两个勾选项比下拉框窄得多，700px 上下并排还挺好，到 560px 才装不下说明文字。 */
+@media(max-width:560px){
+ :root .ui-shell .crawler-media .crawler-media-flags{grid-template-columns:minmax(0,1fr)}
+}
 
 /* Conversation states, including in-flight requests and actionable replies. */
 :root body .ai-native-panel :is(.ai-native-message>span,.ai-native-message p,.ai-native-markdown,.ai-agent-running,.ai-agent-trace,.ai-agent-plan){border:1px solid var(--pop-ink);border-radius:3px;color:var(--pop-ink);background:var(--pop-paper)}

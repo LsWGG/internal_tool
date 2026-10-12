@@ -137,6 +137,61 @@ cd /Users/shunli/Documents/Home/Python/samples/projects/internal_tool
 
 按 `Ctrl + C` 可同时停止前后端。
 
+### Docker 部署
+
+Docker 部署使用后端容器和 Nginx 两个服务。前端不会在容器内重新构建，运行时只读挂载宿主机的 `frontend/dist`，因此发布前需要先生成构建产物：
+
+```bash
+cp .env.example .env
+# 按需编辑 .env，填写模型或 Telegram 等配置
+cd frontend
+npm ci
+npm run build
+cd ..
+docker compose up -d --build
+```
+
+启动后访问 `http://localhost`，后端 API 文档仍可通过 `http://localhost:8000/docs` 访问。Nginx 会把 `/api/` 请求转发到后端，前端路由由 Nginx 回退到 `index.html`。
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+任务结果、上传文件和 Compose 项目保存在 Docker volumes 中，执行 `docker compose down -v` 会同时删除这些数据。Compose 管理功能需要访问宿主机 Docker，因此编排文件默认挂载了 `/var/run/docker.sock`；若部署环境不需要该功能，可以移除这行挂载。
+
+### Docker 离线安装
+
+在可联网的机器上构建离线安装包。脚本会构建后端镜像，并将镜像、前端 `dist`、Compose 配置和安装脚本一起打包：
+
+```bash
+cd /path/to/internal_tool
+cd frontend && npm ci && npm run build
+cd ..
+./docker/build-offline-package.sh
+```
+
+脚本默认使用联网机器 Docker 服务端的平台。若联网机器与离线机器架构不同，请显式指定目标平台，例如在 x86 机器上为 ARM 服务器打包：
+
+```bash
+./docker/build-offline-package.sh --platform linux/arm64
+```
+
+也可以使用 `./docker/build-offline-package.sh --platform linux/amd64` 为 x86_64 服务器打包。跨平台构建需要 Docker Buildx，并且联网机器需要能够拉取对应平台的基础镜像。脚本会在跨平台时自动安装 binfmt/QEMU 模拟支持（需要联网和 Docker 特权权限）。使用 `sudo` 时也建议使用这个参数，因为 sudo 默认会清理环境变量；例如：`sudo ./docker/build-offline-package.sh --platform linux/arm64`。
+
+默认生成 `internal-tool-docker-offline.tar.gz`。将该文件复制到离线机器并执行：
+
+```bash
+tar -xzf internal-tool-docker-offline.tar.gz
+cd docker-offline
+cp .env.example .env
+# 按需编辑 .env
+./install-offline.sh
+```
+
+离线安装只需要目标机器已安装 Docker 和 Docker Compose，不会执行镜像构建或访问网络。可通过 `./install-offline.sh` 重复安装或更新服务。
+
 ## API 说明
 
 各模块统一使用 `/api/<模块>/...` 风格提供任务化接口，通常包含：

@@ -1,5 +1,18 @@
 [
   {
+    "name": "diagram-design",
+    "full_name": "cathrynlavery/diagram-design",
+    "url": "https://github.com/cathrynlavery/diagram-design",
+    "description": "Editorial diagram design for Claude Code, Codex, GitHub Copilot, Cursor, Factory Droid, and Pi. 44 diagram types. Self-contained HTML + SVG. No shadows. No Mermaid slop.",
+    "description_zh": "Claude Code、Codex、GitHub Copilot、Cursor、Factory Droid 和 Pi 的编辑图设计。 44 种图表类型。独立的 HTML + SVG。没有阴影。没有美人鱼污水。",
+    "language": "HTML",
+    "stars": "49,882",
+    "forks": "3,164",
+    "stars_today": "1,083",
+    "source_date": "2026-10-12",
+    "favorited_at": "2026-10-12T22:25:07.152336+08:00"
+  },
+  {
     "name": "weekly",
     "full_name": "ruanyf/weekly",
     "url": "https://github.com/ruanyf/weekly",
