@@ -1,7 +1,7 @@
 // 工具分类的运行时状态：后端存的是「用户改过的东西」，这里把它和代码里的默认目录合起来，
 // 得到首页真正渲染的那一份。
 //
-// 合并只有这一份实现（首页和设置弹窗都走它），而且**空状态必须渲染成代码里那 6 组 18 卡**：
+// 合并只有这一份实现（首页和设置弹窗都走它），而且**空状态必须渲染成代码里那 6 组 24 卡**：
 // test_ui_catalog.py 把全部 /api/** abort 掉，它就是靠这条活着的。
 //
 // 这个模块 import toolCatalog（代码默认值），**不要** import linkTools —— 调用方把外链
@@ -13,7 +13,7 @@ import {externalGroup,toolGroups} from './toolCatalog'
 // 代码里的分类，顺序就是首页的默认顺序（「外链工具」排在最后）。
 const codeGroups=[...toolGroups,externalGroup]
 const codeById=new Map(codeGroups.map(group=>[group.id,group]))
-// 18 个内置工具本来的落点。只有它和 tools 里记的不一样时，那条覆盖才有意义。
+// 24 个内置工具本来的落点。只有它和 tools 里记的不一样时，那条覆盖才有意义。
 const codeToolGroup=new Map(toolGroups.flatMap(group=>group.tools.map(tool=>[tool.id,group.id])))
 
 export const catalogState=reactive({order:[],categories:{},tools:{},loaded:false,failed:false})

@@ -2,7 +2,9 @@
 import {onBeforeUnmount,onMounted,ref} from 'vue'
 import axios from 'axios'
 
-const state=ref({running:false,starting:true,url:'http://127.0.0.1:4224',architecture:'',error:''})
+const state=ref({running:false,starting:true,url:'http://127.0.0.1:4224',embed_path:'/dbx/',architecture:'',error:''})
+// DBX 会话 cookie 是 SameSite=Lax 且 Path=/dbx。iframe 必须和本页同源，登录后才能留在框里。
+const embedPath='/dbx/'
 let timer
 
 async function refresh(){
@@ -29,13 +31,13 @@ onBeforeUnmount(()=>clearInterval(timer))
           </div>
           <span class="dbx-arch">{{state.architecture||'检测架构中'}}</span>
         </div>
-        <a v-if="state.running" class="dbx-open" :href="state.url" target="_blank" rel="noopener noreferrer">↗ 在新标签打开 DBX</a>
+        <a v-if="state.running" class="dbx-open" :href="embedPath" target="_blank" rel="noopener noreferrer">↗ 在新标签打开 DBX</a>
         <span v-else class="dbx-open is-disabled" aria-disabled="true">↗ 等待 DBX 就绪</span>
       </div>
     </header>
 
     <div v-if="state.running" class="dbx-frame-wrap">
-      <iframe class="dbx-frame" :src="state.url" title="DBX 数据库工作台"></iframe>
+      <iframe class="dbx-frame" :src="embedPath" title="DBX 数据库工作台"></iframe>
     </div>
     <div v-else class="dbx-wait" role="status">
       <span>DBX</span>

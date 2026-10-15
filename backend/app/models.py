@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -23,6 +25,10 @@ class TaskOptions(BaseModel):
     max_workers: int = Field(default=8, ge=1, le=16)
     split_size: int = Field(default=2048, ge=256, le=8192)
     output_format: str = Field(default="png", pattern="^(png|tif)$")
+    png_width: int = Field(default=0, ge=0, le=8192)
+    png_height: int = Field(default=0, ge=0, le=8192)
+    download_path: str = Field(default="", max_length=4096)
+    pack_mbtiles: bool = False
 
     @model_validator(mode="after")
     def validate_zoom_range(self):
@@ -40,6 +46,14 @@ class TaskOptions(BaseModel):
         source_min,source_max=source_limits[self.tile_source]
         if self.zoom_min < source_min or self.zoom_max > source_max:
             raise ValueError(f"所选数据源仅支持 Z{source_min}–Z{source_max}")
+        if (self.png_width == 0) != (self.png_height == 0):
+            raise ValueError("PNG 自定义尺寸需要同时设置宽度和高度，或都留空以保存原始瓦片")
+        if self.png_width and (self.png_width < 64 or self.png_height < 64):
+            raise ValueError("PNG 自定义尺寸至少为 64 像素")
+        if self.download_path.strip() and not Path(self.download_path.strip()).expanduser().is_absolute():
+            raise ValueError("下载路径必须是服务器上的绝对路径")
+        if self.pack_mbtiles and (self.output_format != "png" or self.data_type == "dem"):
+            raise ValueError("只有 PNG 影像可以打包为 MBTiles")
         return self
 
 

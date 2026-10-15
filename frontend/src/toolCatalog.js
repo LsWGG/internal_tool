@@ -4,11 +4,13 @@ export const externalGroup={id:'external',name:'外链工具',english:'EXTERNAL 
 
 export const toolGroups=[
   {id:'geo',name:'地理空间',english:'GEOSPATIAL',description:'地图下载、空间格式转换与图层预览。',icon:'geo',tools:[
-    {id:'map',name:'卫星地图下载',tag:'影像与高程',description:'多数据源影像与 DEM，框选范围、批量下载和 GeoTIFF 导出。',keywords:'卫星 高德 Google 地图 瓦片 tif dem',icon:'map'},
-    {id:'tile-viewer',name:'地图瓦片查看',tag:'XYZ 瓦片预览',description:'加载在线瓦片链接或上传 z/x/y 目录，检查层级、覆盖范围与图像质量。',keywords:'xyz tiles 瓦片 在线链接 目录 png jpg webp 预览',icon:'map'},
+    {id:'map',name:'卫星地图下载',tag:'影像与高程',description:'多数据源影像与 DEM，框选范围、批量下载和 GeoTIFF 导出。',keywords:'卫星 高德 Google 地图 瓦片 tif dem mbtiles',icon:'map'},
+    {id:'tile-viewer',name:'地图瓦片查看',tag:'XYZ 瓦片预览',description:'加载在线瓦片链接或上传 z/x/y 目录，检查层级、覆盖范围与图像质量。',keywords:'xyz tiles 瓦片 在线链接 目录 png jpg webp 预览 mbtiles tms wmts 拆包',icon:'map'},
     {id:'propzone',name:'全美行政区域 SHP 下载',tag:'美国区域数据',description:'定位州、县和城市，选择下载颗粒度，获取边界与 zoning 数据。',keywords:'propzone 美国 行政区 shapefile',icon:'layers'},
     {id:'gjb',name:'GJB 地图转 SHP',tag:'空间格式转换',description:'转换 GJB 图幅，保留多图层、注记并预览转换成果。',keywords:'gjb shapefile 转换',icon:'layers'},
     {id:'shp',name:'SHP 文件预览',tag:'空间数据查看',description:'叠加多个 Shapefile，独立控制图层显隐、定位与删除。',keywords:'shapefile gis 预览',icon:'geo'},
+    {id:'raster-clip',name:'栅格裁切',tag:'按范围裁切',description:'用 Shapefile 或框选范围裁切 GeoTIFF、DEM 和瓦片目录，结果直接写到外接磁盘。',keywords:'geotiff dem 裁切 clip shp 范围 瓦片',icon:'map'},
+    {id:'vector',name:'矢量格式转换',tag:'格式互转',description:'GeoJSON、KML、GPKG、DXF 与 SHP 互转，坐标系自动识别，SHP 结果可在现有预览里打开。',keywords:'geojson kml gpkg dxf shp 转换',icon:'layers'},
   ]},
   {id:'database',name:'数据库',english:'DATABASES',description:'在线管理数据库，完成数据备份、恢复与迁移。',icon:'data',tools:[
     {id:'dbx',name:'DBX 数据库工作台',tag:'本地管理',description:'项目启动时自动运行本机对应架构的 DBX，在页面内连接和管理数据库。',keywords:'dbx 数据库 sql sqlite mysql postgres 本地 管理 工作台',icon:'data'},

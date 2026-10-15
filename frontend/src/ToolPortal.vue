@@ -10,7 +10,7 @@ const emit=defineEmits(['open','settings'])
 const query=ref(''),active=ref(''),scroller=ref()
 // 分组来自 catalogState 的合并视图（用户在设置里改过的顺序/名字/落点都在里面），
 // 外链工具挂到各自选的分类下，没选分类的都落在最后的「外链工具」组。
-// 后端读不到时合并视图就是代码里那 6 组 18 卡 —— test_ui_catalog.py 把 /api/** 全 abort，
+// 后端读不到时合并视图就是代码里那 6 组 24 卡 —— test_ui_catalog.py 把 /api/** 全 abort，
 // 它守的就是这条。
 const visibleGroups=computed(()=>{const words=query.value.toLowerCase().trim().split(/\s+/).filter(Boolean);const groups=mergeGroups(props.links.map(toCatalogTool));return groups.map(group=>({...group,tools:group.tools.filter(tool=>words.every(word=>`${group.name} ${tool.name} ${tool.description} ${tool.keywords}`.toLowerCase().includes(word)))})).filter(group=>group.tools.length)})
 const matchCount=computed(()=>visibleGroups.value.reduce((count,group)=>count+group.tools.length,0))
