@@ -40,10 +40,10 @@ sys.path.insert(0, str(BACKEND))
 
 # 代码里那 7 个分类的顺序（`toolCatalog.js` 的分组 + 末尾的「外链工具」）。
 CODE_ORDER = ["geo", "database", "documents", "images", "collection", "delivery", "external"]
-# 首页卡片数的两个基准：代码里 18 个内置工具；「外链 chip 换组」那一段会种下一条外链，
-# 从那之后它就是第 19 张卡 —— 外链也是卡片，落在它归属的那个分组里（这里被挪进了「图片处理」），
+# 首页卡片数的两个基准：代码里 24 个内置工具；「外链 chip 换组」那一段会种下一条外链，
+# 从那之后它就是第 25 张卡 —— 外链也是卡片，落在它归属的那个分组里（这里被挪进了「图片处理」），
 # 所以分组数不变、卡片数 +1。
-BUILTIN_CARDS = 18
+BUILTIN_CARDS = 24
 CARDS_AFTER_SEED = BUILTIN_CARDS + 1
 NEW_NAME = "我的分类"
 NEW_DESC = "临时放一些常用工具"
@@ -219,7 +219,7 @@ def phase_empty(page):
     """什么都没改过时：首页与改动前逐字节相同，分类 TAB 是代码里那 7 个内置分类。"""
     groups(page).first.wait_for(timeout=30000)
     assert groups(page).count() == 6, f"空表时分组数变了：{groups(page).count()}"
-    assert cards(page).count() == 18, f"空表时卡片数变了：{cards(page).count()}"
+    assert cards(page).count() == BUILTIN_CARDS, f"空表时卡片数变了：{cards(page).count()}"
 
     open_cats(page)
     assert row_ids(page) == CODE_ORDER, row_ids(page)
@@ -258,7 +258,7 @@ def phase_create(page):
 
     close_settings(page)
     assert groups(page).count() == 6, "空分类不该出现在首页"
-    assert cards(page).count() == 18
+    assert cards(page).count() == BUILTIN_CARDS
     return new_id
 
 
@@ -275,7 +275,7 @@ def phase_drag_tool(page, new_id):
 
     close_settings(page)
     assert groups(page).count() == 5, "搬空的「开发交付」该从首页消失"
-    assert cards(page).count() == 18, "工具只是换了组，不该多也不该少"
+    assert cards(page).count() == BUILTIN_CARDS, "工具只是换了组，不该多也不该少"
     assert page.locator('[data-group="delivery"]').count() == 0
     assert page.locator('[data-group="images"] .catalog-card').count() == 3
 
@@ -522,7 +522,7 @@ def main() -> int:
 
                 assert (data / "catalog" / "catalog.json").exists(), "改了一整轮却没落盘"
                 assert not errors, errors
-                print("PASS: 空表 6 组 18 卡 · 分类 TAB 7 行内置 / 新建分类落库且不上首页"
+                print("PASS: 空表 6 组 24 卡 · 分类 TAB 7 行内置 / 新建分类落库且不上首页"
                       " / 拖拽工具换组（稀疏 tools·空组消失·卡片数不变）"
                       " / 拖拽分类排序（中线判定·首页首组跟着变）"
                       " / 悬停高亮（合成事件·不落库）"

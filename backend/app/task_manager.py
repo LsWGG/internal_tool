@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .downloader import download_bounds, validate_result_files
+from .local_path import resolve_directory
+from .mbtiles import pack_directory, safe_mbtiles_name
 from .models import CreateTask
 
 
@@ -52,10 +54,14 @@ class TaskManager:
         self.tasks = self._load()
         self.controls = {}
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="map-task")
+        resume_ids = []
         for item in self.tasks.values():
-            if item["status"] in ("queued", "running", "paused"):
-                item.update(status="failed", message="服务重启，任务已中断")
+            if item["status"] in ("queued", "running"):
+                item.update(status="queued", message="服务重启，从已下载内容继续", error=None)
+                resume_ids.append(item["id"])
         self._save()
+        for task_id in resume_ids:
+            self._start(task_id)
 
     def _load(self):
         try:
@@ -69,9 +75,63 @@ class TaskManager:
         tmp.write_text(json.dumps(self.tasks, ensure_ascii=False, indent=2), "utf-8")
         tmp.replace(self.state_file)
 
+    def prepare(self, request: CreateTask):
+        raw = request.options.download_path.strip()
+        if raw:
+            resolve_directory(raw, writable=True)
+
+    def _output_dir(self, task_id: str, request: CreateTask) -> Path:
+        raw = request.options.download_path.strip()
+        root = resolve_directory(raw, writable=True) if raw else self.data_dir
+        return root / task_id
+
+    def _stored_output(self, task: dict) -> Path:
+        raw = task.get("output_dir") or ""
+        path = Path(raw) if raw else self.data_dir / task["id"]
+        if path.name != task["id"]:
+            raise ValueError("任务输出目录无效")
+        return path
+
+    def _archive_file(self, task_id: str, output_dir: Path, archive_path: str | None = None) -> Path:
+        if archive_path:
+            path = Path(archive_path)
+            if path.name == f"{task_id}.zip":
+                return path
+        return output_dir.parent / f"{task_id}.zip"
+
+    def _remove_archives(self, task_id: str, output_dir: Path, archive_path: str | None = None):
+        candidates = [
+            self._archive_file(task_id, output_dir, archive_path),
+            output_dir.parent / f"{task_id}.zip",
+            self.data_dir / f"{task_id}.zip",
+        ]
+        seen = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen or path.name != f"{task_id}.zip":
+                continue
+            seen.add(key)
+            path.unlink(missing_ok=True)
+
+    def _remove_output(self, task_id: str, output_dir: Path, archive_path: str | None = None):
+        if output_dir.name == task_id:
+            shutil.rmtree(output_dir, ignore_errors=True)
+        self._remove_archives(task_id, output_dir, archive_path)
+
+    def _start(self, task_id: str):
+        with self.lock:
+            task = self.tasks.get(task_id)
+            if not task:
+                return
+            request = CreateTask.model_validate(task["request"])
+            self.controls[task_id] = TaskControl()
+        self.pool.submit(self._run, task_id, request)
+
     def create(self, request: CreateTask):
+        self.prepare(request)
         task_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
+        output_dir = self._output_dir(task_id, request)
         if not request.options.output_name.strip():
             bounds = request.bounds
             source_names={"google_satellite":"Google卫星","google_hybrid":"Google混合影像","bing_aerial":"Bing航拍","amap_satellite":"高德卫星","amap_hybrid":"高德卫星混合","amap_standard":"高德标准地图","osm_standard":"OpenStreetMap","opentopomap":"OpenTopoMap","aws_terrarium":"AWS高程"}
@@ -83,12 +143,12 @@ class TaskManager:
             )
         record = {"id": task_id, "status": "queued", "progress": 0, "current": 0, "total": 0,
                   "message": "等待执行", "created_at": now, "updated_at": now,
+                  "output_dir": str(output_dir),
                   "request": request.model_dump(), "result": None, "error": None}
         with self.lock:
             self.tasks[task_id] = record
-            self.controls[task_id] = TaskControl()
             self._save()
-        self.pool.submit(self._run, task_id, request)
+        self._start(task_id)
         return record
 
     def list(self):
@@ -114,8 +174,14 @@ class TaskManager:
     def _run(self, task_id: str, request: CreateTask):
         control = self.controls[task_id]
         output_dir = self.data_dir / task_id
-        output_dir.mkdir(parents=True, exist_ok=True)
         try:
+            with self.lock:
+                task = self.tasks.get(task_id)
+                if task:
+                    output_dir = self._stored_output(task)
+            if output_dir.name != task_id:
+                raise ValueError("任务输出目录无效")
+            output_dir.mkdir(parents=True, exist_ok=True)
             control.checkpoint()
             self._update(task_id, status="running", message="任务已开始")
             result = download_bounds(request.bounds, request.geometry, request.options, output_dir,
@@ -123,22 +189,31 @@ class TaskManager:
             control.checkpoint()
             self._update(task_id,message="正在校验下载结果完整性")
             validate_result_files(output_dir,result)
-            shutil.rmtree(output_dir/".tiles",ignore_errors=True)
-            (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True)
-            archive = shutil.make_archive(str(output_dir), "zip", output_dir)
+            if request.options.pack_mbtiles:
+                self._update(task_id, message="正在打包 MBTiles")
+                packed = pack_directory(
+                    output_dir, output_dir / safe_mbtiles_name(request.options.output_name),
+                    name=request.options.output_name,
+                    bounds=(request.bounds.west, request.bounds.south, request.bounds.east, request.bounds.north),
+                    task_id=task_id, checkpoint=control.checkpoint,
+                    progress=lambda current, total, message: self._progress(task_id, current, total, message),
+                )
+                result["mbtiles"] = packed["file"]
+            self._remove_archives(task_id, output_dir)
+            archive = shutil.make_archive(str(output_dir.parent / task_id), "zip", output_dir)
+            shutil.rmtree(output_dir / ".tiles", ignore_errors=True)
             control.checkpoint()
             result["archive"] = Path(archive).name
+            result["archive_path"] = str(Path(archive).resolve())
             self._update(task_id, status="completed", progress=100, message="下载完成", result=result)
         except TaskCancelled:
-            shutil.rmtree(output_dir, ignore_errors=True)
-            (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True)
+            self._remove_output(task_id, output_dir)
             self._update(task_id, status="cancelled", message="任务已取消")
         except Exception as exc:
             self._update(task_id, status="failed", message="任务失败", error=str(exc))
         finally:
             if control.cancelled:
-                shutil.rmtree(output_dir, ignore_errors=True)
-                (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True)
+                self._remove_output(task_id, output_dir)
             with self.lock:
                 if self.controls.get(task_id) is control:
                     self.controls.pop(task_id, None)
@@ -160,12 +235,18 @@ class TaskManager:
             task, control = self.tasks.get(task_id), self.controls.get(task_id)
             if not task:
                 return None
-            if task["status"] != "paused" or not control:
+            if task["status"] != "paused":
                 raise ValueError("当前状态无法继续")
-            task.update(status="running", message="任务继续执行", updated_at=datetime.now(timezone.utc).isoformat())
-            control.resume()
+            if control:
+                task.update(status="running", message="任务继续执行", updated_at=datetime.now(timezone.utc).isoformat())
+                control.resume()
+                self._save()
+                return task
+            task.update(status="queued", message="服务重启，从已下载内容继续", error=None,
+                        updated_at=datetime.now(timezone.utc).isoformat())
             self._save()
-            return task
+        self._start(task_id)
+        return self.get(task_id)
 
     def delete(self, task_id: str):
         with self.lock:
@@ -175,10 +256,13 @@ class TaskManager:
             control = self.controls.get(task_id)
             if control:
                 control.cancel()
+            try:
+                output_dir = self._stored_output(task)
+            except ValueError:
+                output_dir = self.data_dir / task_id
+            archive = task.get("result", {}).get("archive_path") if isinstance(task.get("result"), dict) else None
             self._save()
-        shutil.rmtree(self.data_dir / task_id, ignore_errors=True)
-        archive = self.data_dir / f"{task_id}.zip"
-        archive.unlink(missing_ok=True)
+        self._remove_output(task_id, output_dir, archive)
         return True
 
     def retry(self, task_id: str):
@@ -188,15 +272,17 @@ class TaskManager:
                 return None
             if task["status"] not in ("failed", "cancelled"):
                 raise ValueError("仅失败或已取消的任务可以重试")
-            request = CreateTask.model_validate(task["request"])
-            control = TaskControl()
-            self.controls[task_id] = control
             now = datetime.now(timezone.utc).isoformat()
+            archive = task.get("result", {}).get("archive_path") if isinstance(task.get("result"), dict) else None
+            try:
+                output_dir = self._stored_output(task)
+            except ValueError:
+                output_dir = self.data_dir / task_id
             task.update(status="queued", progress=0, current=0, total=0,
                         message="等待重新执行", updated_at=now, result=None, error=None)
             self._save()
         # Preserve verified tile cache and partial output so retry can resume
         # from the missing tiles instead of downloading the whole task again.
-        (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True)
-        self.pool.submit(self._run, task_id, request)
+        self._remove_archives(task_id, output_dir, archive)
+        self._start(task_id)
         return task

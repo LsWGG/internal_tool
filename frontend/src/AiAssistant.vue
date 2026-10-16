@@ -103,6 +103,15 @@ function planDetails(message){
   if(p.max_items!==undefined)details.push(['采集数量',p.max_items===-1?'不限量增量':`${p.max_items} 条`])
   if(p.fields?.length)details.push(['保存字段',p.fields.join('、')])
   if(p.output_format)details.push(['输出格式',formatNames[p.output_format]||p.output_format.toUpperCase()])
+  if(Number(p.png_width)>0&&Number(p.png_height)>0)details.push(['PNG 尺寸',`${p.png_width} × ${p.png_height}`])
+  if(p.pack_mbtiles)details.push(['MBTiles','打包'])
+  if(p.download_path)details.push(['下载路径',p.download_path])
+  if(p.source_path)details.push(['源路径',p.source_path])
+  if(p.shp_path)details.push(['Shapefile',p.shp_path])
+  if(p.target_format)details.push(['目标格式',String(p.target_format).toUpperCase()])
+  if(p.in_place)details.push(['写出位置','原位置'])
+  if([p.west,p.south,p.east,p.north].every(value=>value!==undefined&&value!==null&&value!==''))details.push(['范围',`${p.west}, ${p.south}, ${p.east}, ${p.north}`])
+  if(p.output_path)details.push(['输出路径',p.output_path])
   for(const [key,label] of Object.entries({region_query:'下载范围',data_type:'数据类型',tile_source:'地图源',zoom_min:'最小层级',zoom_max:'最大层级',filename_template:'命名模板',task_id:'任务 ID',action:'任务操作'})){
     if(p[key]!==undefined)details.push([label,String(p[key])])
   }

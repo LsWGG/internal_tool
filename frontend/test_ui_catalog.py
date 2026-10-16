@@ -8,12 +8,12 @@ with sync_playwright() as p:
     page.route('**/api/**', lambda route: route.abort())
     page.goto('http://127.0.0.1:5174/')
     page.locator('.catalog-card').first.wait_for()
-    # 22 = the built-in tools in toolCatalog.js. The store's own external shortcuts (a second
+    # 24 = the built-in tools in toolCatalog.js. The store's own external shortcuts (a second
     # card in 文档处理 and in 开发工具) come from /api/links, which this suite aborts, so they
     # are absent here -- that absence is also why these two counts must stay equal.
-    assert page.locator('.catalog-card').count() == 22
+    assert page.locator('.catalog-card').count() == 24
     assert page.locator('.catalog-group').count() == 6
-    assert len(set(page.locator('.catalog-card').evaluate_all('(items)=>items.map(x=>x.hash)'))) == 22
+    assert len(set(page.locator('.catalog-card').evaluate_all('(items)=>items.map(x=>x.hash)'))) == 24
     fixed_top = page.locator('.catalog-head').bounding_box()['y']
     for group in ['geo','database','documents','images','collection','delivery']:
         page.locator(f'.catalog-nav button').nth(['geo','database','documents','images','collection','delivery'].index(group)).click()
@@ -36,7 +36,7 @@ with sync_playwright() as p:
     # 400/580 workbench or replaced it on purpose (tile-viewer keeps its own 350px column,
     # json/mermaid/compose declare their own grids) -- they are still swept for title size,
     # scroll position and 390px overflow, they just have no entry in `workspaces`.
-    routes=['map','tile-viewer','propzone','gjb','shp','dbx','database','es','nebula',
+    routes=['map','tile-viewer','propzone','gjb','shp','raster-clip','vector','dbx','database','es','nebula',
             'pdf-toolbox','pdf','word-batch','md-word','mermaid-export','clean',
             'image-convert','image-metadata','crawler','trending','json','compose-manager','docker']
     workspaces={'map':'.workspace','propzone':'.propzone-workspace','gjb':'.gjb-workspace','shp':'.shp-workspace','es':'.es-workspace','nebula':'.es-workspace','pdf':'.pdf-workspace','word-batch':'.wb-workspace','md-word':'.md-word-workspace','image-convert':'.image-convert-workspace','docker':'.docker-workspace','clean':'.clean-workspace'}

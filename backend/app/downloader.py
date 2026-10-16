@@ -214,20 +214,118 @@ def _tile_range(bounds: Bounds, zoom: int):
     return x0, x1, y0, y1
 
 
+def _image_size(path: Path) -> tuple[int, int] | None:
+    if not path.is_file() or path.stat().st_size < 100:
+        return None
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            return image.size
+    except Exception:
+        return None
+
+
+def _request_window(bounds: Bounds, zoom: int, x0: int, y0: int, x1: int, y1: int):
+    left = round(lon_to_pixel(bounds.west, zoom))
+    right = round(lon_to_pixel(bounds.east, zoom))
+    top = round(lat_to_pixel(bounds.north, zoom))
+    bottom = round(lat_to_pixel(bounds.south, zoom))
+    canvas_left, canvas_top = x0 * 256, y0 * 256
+    canvas_right, canvas_bottom = (x1 + 1) * 256, (y1 + 1) * 256
+    left = min(max(left, canvas_left), canvas_right)
+    right = min(max(right, canvas_left), canvas_right)
+    top = min(max(top, canvas_top), canvas_bottom)
+    bottom = min(max(bottom, canvas_top), canvas_bottom)
+    return left, top, right, bottom
+
+
+def _save_png(path: Path, image: Image.Image) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".part")
+    image.save(temp, format="PNG")
+    temp.replace(path)
+
+
+def _tif_size(path: Path) -> tuple[int, int] | None:
+    if not path.is_file() or path.stat().st_size < 100:
+        return None
+    try:
+        with rasterio.open(path) as dataset:
+            return dataset.width, dataset.height
+    except Exception:
+        return None
+
+
+def _tif_chunks(bounds: Bounds, zoom: int, x0: int, y0: int, x1: int, y1: int,
+                split_size: int, output_dir: Path, prefix: str) -> list[dict]:
+    chunk_tiles = max(1, split_size // 256)
+    left, top, right, bottom = _request_window(bounds, zoom, x0, y0, x1, y1)
+    chunks = []
+    for chunk_y in range(y0, y1 + 1, chunk_tiles):
+        for chunk_x in range(x0, x1 + 1, chunk_tiles):
+            end_x = min(x1 + 1, chunk_x + chunk_tiles)
+            end_y = min(y1 + 1, chunk_y + chunk_tiles)
+            origin_x, origin_y = chunk_x * 256, chunk_y * 256
+            global_left = max(origin_x, left)
+            global_top = max(origin_y, top)
+            global_right = min(end_x * 256, right)
+            global_bottom = min(end_y * 256, bottom)
+            if global_right <= global_left or global_bottom <= global_top:
+                continue
+            chunks.append({
+                "chunk_x": chunk_x, "chunk_y": chunk_y, "end_x": end_x, "end_y": end_y,
+                "global_left": global_left, "global_top": global_top,
+                "global_right": global_right, "global_bottom": global_bottom,
+                "width": global_right - global_left, "height": global_bottom - global_top,
+                "path": output_dir / f"{prefix}_z{zoom:02d}_x{chunk_x}_y{chunk_y}.tif",
+            })
+    return chunks
+
+
 def _download_zoom(bounds: Bounds, geometry: dict | None, options: TaskOptions, output_dir: Path,
                    zoom: int, progress: Progress, checkpoint: Checkpoint, completed: int, total: int) -> dict:
     x0, x1, y0, y1 = _tile_range(bounds, zoom)
     tasks = [(x, y) for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
+    prefix = "dem" if options.data_type == "dem" else "satellite"
+    custom_png = options.output_format == "png" and options.png_width > 0 and options.png_height > 0
+    raw_png = options.output_format == "png" and not custom_png
+    tile_size = (options.png_width, options.png_height)
+    chunks = _tif_chunks(bounds, zoom, x0, y0, x1, y1, options.split_size, output_dir, prefix) if options.output_format == "tif" else []
+
+    def tile_target(x: int, y: int) -> Path:
+        return output_dir / str(zoom) / str(x) / f"{y}.png"
+
+    def custom_done(x: int, y: int) -> bool:
+        return _image_size(tile_target(x, y)) == tile_size
+
+    outputs_ready = (
+        (custom_png and all(custom_done(x, y) for x, y in tasks))
+        or (bool(chunks) and all(_tif_size(chunk["path"]) == (chunk["width"], chunk["height"]) for chunk in chunks))
+    )
 
     failures: list[str] = []
     cache_root=output_dir/".tiles"/options.tile_source/f"z{zoom}"
     cached=[];missing=[]
-    for x,y in tasks:
-        path=cache_root/str(x)/f"{y}.png"
-        if _valid_tile(path): cached.append((x,y,path))
-        else:
-            path.unlink(missing_ok=True);missing.append((x,y,path))
-    progress(completed+len(cached), total, f"Z{zoom}：已复用 {len(cached)} 个，待下载 {len(missing)} 个瓦片")
+    if outputs_ready:
+        cached = [(x, y, cache_root / str(x) / f"{y}.png") for x, y in tasks]
+        progress(completed + len(tasks), total, f"Z{zoom}：输出已存在，跳过 {len(tasks)} 个瓦片")
+    else:
+        for x, y in tasks:
+            path = cache_root / str(x) / f"{y}.png"
+            if custom_png and custom_done(x, y):
+                cached.append((x, y, path))
+                continue
+            raw_target = tile_target(x, y) if raw_png else None
+            if raw_target and _valid_tile(raw_target) and not _valid_tile(path):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(raw_target, path)
+            if _valid_tile(path):
+                cached.append((x, y, path))
+            else:
+                path.unlink(missing_ok=True)
+                missing.append((x, y, path))
+        progress(completed+len(cached), total, f"Z{zoom}：已复用 {len(cached)} 个，待下载 {len(missing)} 个瓦片")
     def controlled_fetch(x, y):
         checkpoint()
         return _fetch_with_retry(x,y,zoom,options,cache_root/str(x)/f"{y}.png",checkpoint)
@@ -242,14 +340,34 @@ def _download_zoom(bounds: Bounds, geometry: dict | None, options: TaskOptions, 
                 failures.append(f"{xy[0]}/{xy[1]}: {exc}")
             progress(completed+len(cached)+done,total,f"Z{zoom}：已下载 {done}/{len(missing)}，复用 {len(cached)} 个瓦片")
 
-    if failures:
-        valid=sum(_valid_tile(cache_root/str(x)/f"{y}.png") for x,y in tasks)
-        raise RuntimeError(f"Z{zoom} 有 {len(failures)} 个瓦片未通过完整性校验；已保留 {valid} 个有效瓦片，可稍后重试继续")
-    valid=sum(_valid_tile(cache_root/str(x)/f"{y}.png") for x,y in tasks)
-    if valid!=len(tasks): raise RuntimeError(f"Z{zoom} 瓦片不完整：需要 {len(tasks)}，有效 {valid}")
+    if not outputs_ready:
+        def tile_ready(x, y):
+            if custom_png and custom_done(x, y):
+                return True
+            return _valid_tile(cache_root / str(x) / f"{y}.png")
+        if failures:
+            valid=sum(tile_ready(x, y) for x, y in tasks)
+            raise RuntimeError(f"Z{zoom} 有 {len(failures)} 个瓦片未通过完整性校验；已保留 {valid} 个有效瓦片，可稍后重试继续")
+        valid=sum(tile_ready(x, y) for x, y in tasks)
+        if valid!=len(tasks): raise RuntimeError(f"Z{zoom} 瓦片不完整：需要 {len(tasks)}，有效 {valid}")
 
-    files=[];prefix="dem" if options.data_type=="dem" else "satellite"
-    if options.output_format=="png":
+    files=[]
+    if custom_png:
+        (output_dir / f"{prefix}_z{zoom:02d}.png").unlink(missing_ok=True)
+        for stale in output_dir.glob(f"{prefix}_z{zoom:02d}_x*_y*.png"):
+            stale.unlink(missing_ok=True)
+        for index, (x, y) in enumerate(tasks, 1):
+            checkpoint()
+            target = tile_target(x, y)
+            if not custom_done(x, y):
+                tile = _load_tile(cache_root / str(x) / f"{y}.png")
+                if tile.size != tile_size:
+                    tile = tile.resize(tile_size, Image.Resampling.LANCZOS)
+                _save_png(target, tile)
+            files.append(str(target.relative_to(output_dir)))
+            if index % 200 == 0:
+                progress(completed + len(tasks), total, f"Z{zoom}：正在整理 PNG 瓦片 {index}/{len(tasks)}")
+    elif options.output_format=="png":
         for index,(x,y) in enumerate(tasks,1):
             checkpoint();source=cache_root/str(x)/f"{y}.png";target=output_dir/str(zoom)/str(x)/f"{y}.png"
             if not _valid_tile(target):
@@ -258,34 +376,33 @@ def _download_zoom(bounds: Bounds, geometry: dict | None, options: TaskOptions, 
             files.append(str(target.relative_to(output_dir)))
             if index%200==0: progress(completed+len(tasks),total,f"Z{zoom}：正在整理 PNG 瓦片 {index}/{len(tasks)}")
     else:
-        chunk_tiles=max(1,options.split_size//256)
-        req_left=round(lon_to_pixel(bounds.west,zoom));req_right=round(lon_to_pixel(bounds.east,zoom))
-        req_top=round(lat_to_pixel(bounds.north,zoom));req_bottom=round(lat_to_pixel(bounds.south,zoom))
-        for chunk_y in range(y0,y1+1,chunk_tiles):
-            for chunk_x in range(x0,x1+1,chunk_tiles):
-                checkpoint();end_x=min(x1+1,chunk_x+chunk_tiles);end_y=min(y1+1,chunk_y+chunk_tiles)
-                origin_x,origin_y=chunk_x*256,chunk_y*256
-                canvas=Image.new("RGB",((end_x-chunk_x)*256,(end_y-chunk_y)*256))
-                for y in range(chunk_y,end_y):
-                    for x in range(chunk_x,end_x):
-                        canvas.paste(_load_tile(cache_root/str(x)/f"{y}.png"),((x-chunk_x)*256,(y-chunk_y)*256))
-                global_left=max(origin_x,req_left);global_top=max(origin_y,req_top)
-                global_right=min(end_x*256,req_right);global_bottom=min(end_y*256,req_bottom)
-                if global_right<=global_left or global_bottom<=global_top: continue
-                part=canvas.crop((global_left-origin_x,global_top-origin_y,global_right-origin_x,global_bottom-origin_y))
-                if geometry: part=_mask_geometry_at_pixels(part,geometry,zoom,global_left,global_top)
-                west_m,north_m=pixel_to_mercator(global_left,global_top,zoom);east_m,south_m=pixel_to_mercator(global_right,global_bottom,zoom)
-                transform=from_bounds(west_m,south_m,east_m,north_m,part.width,part.height);pixels=np.asarray(part)
-                path=output_dir/f"{prefix}_z{zoom:02d}_x{chunk_x}_y{chunk_y}.tif";temp=path.with_suffix(".part")
-                profile=dict(driver="GTiff",width=part.width,height=part.height,crs="EPSG:3857",transform=transform,compress="deflate")
-                if options.data_type=="dem":
-                    elevation=decode_terrarium(pixels)
-                    with rasterio.open(temp,"w",count=1,dtype="float32",nodata=-32768.0,**profile) as dataset:
-                        dataset.write(elevation,1);dataset.set_band_description(1,"Elevation (meters)")
-                else:
-                    with rasterio.open(temp,"w",count=3,dtype=pixels.dtype,**profile) as dataset:
-                        for band in range(3): dataset.write(pixels[:,:,band],band+1)
-                temp.replace(path);files.append(str(path.relative_to(output_dir)))
+        for chunk in chunks:
+            checkpoint()
+            path = chunk["path"]
+            if _tif_size(path) == (chunk["width"], chunk["height"]):
+                files.append(str(path.relative_to(output_dir)))
+                continue
+            canvas=Image.new("RGB",((chunk["end_x"]-chunk["chunk_x"])*256,(chunk["end_y"]-chunk["chunk_y"])*256))
+            for y in range(chunk["chunk_y"], chunk["end_y"]):
+                for x in range(chunk["chunk_x"], chunk["end_x"]):
+                    canvas.paste(_load_tile(cache_root/str(x)/f"{y}.png"),((x-chunk["chunk_x"])*256,(y-chunk["chunk_y"])*256))
+            origin_x, origin_y = chunk["chunk_x"] * 256, chunk["chunk_y"] * 256
+            part=canvas.crop((chunk["global_left"]-origin_x, chunk["global_top"]-origin_y,
+                              chunk["global_right"]-origin_x, chunk["global_bottom"]-origin_y))
+            if geometry: part=_mask_geometry_at_pixels(part,geometry,zoom,chunk["global_left"],chunk["global_top"])
+            west_m,north_m=pixel_to_mercator(chunk["global_left"],chunk["global_top"],zoom)
+            east_m,south_m=pixel_to_mercator(chunk["global_right"],chunk["global_bottom"],zoom)
+            transform=from_bounds(west_m,south_m,east_m,north_m,part.width,part.height);pixels=np.asarray(part)
+            temp=path.with_suffix(".part")
+            profile=dict(driver="GTiff",width=part.width,height=part.height,crs="EPSG:3857",transform=transform,compress="deflate")
+            if options.data_type=="dem":
+                elevation=decode_terrarium(pixels)
+                with rasterio.open(temp,"w",count=1,dtype="float32",nodata=-32768.0,**profile) as dataset:
+                    dataset.write(elevation,1);dataset.set_band_description(1,"Elevation (meters)")
+            else:
+                with rasterio.open(temp,"w",count=3,dtype=pixels.dtype,**profile) as dataset:
+                    for band in range(3): dataset.write(pixels[:,:,band],band+1)
+            temp.replace(path);files.append(str(path.relative_to(output_dir)))
     return {"files": files, "tile_count": len(tasks), "cached_tiles": len(cached),
             "downloaded_tiles": len(missing), "failed_tiles": len(failures),
             "format": options.output_format, "data_type": options.data_type, "tile_source": options.tile_source,

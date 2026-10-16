@@ -4,7 +4,7 @@
 私有实例（127.0.0.1:8002，数据根在临时目录里现场生成），因为这里要验证的正是
 「在弹窗里写进去之后首页怎么变」这一整条链路。
 
-第一条断言（后端读不到时首页仍是 6 组 18 卡）与 `test_ui_catalog.py` 是同一个场景：
+第一条断言（后端读不到时首页仍是 6 组 24 卡）与 `test_ui_catalog.py` 是同一个场景：
 那边把全部 `/api/**` abort 掉，所以那条护栏在那边也一直站着，这边只是再明确验一次。
 
 用 307 跳转而不是 `route.fetch` 转发：与 `test_clean_browser.py` 同一个理由（那条路上
@@ -130,10 +130,10 @@ def save(page):
 
 
 def phase_empty_home(page):
-    """后端还没写任何数据时，首页与改动前完全一样：6 组 18 卡。"""
+    """后端还没写任何数据时，首页与改动前完全一样：6 组 24 卡。"""
     groups(page).first.wait_for(timeout=30000)
     assert groups(page).count() == 6, f"空表时分组数变了：{groups(page).count()}"
-    assert cards(page).count() == 18, f"空表时卡片数变了：{cards(page).count()}"
+    assert cards(page).count() == 24, f"空表时卡片数变了：{cards(page).count()}"
     assert page.get_by_role("button", name="设置").is_visible()
 
 
@@ -166,7 +166,7 @@ def phase_bad_url(page):
     assert page.get_by_role("dialog").is_visible(), "报错后弹窗不该关掉"
     assert not links_of(), "被拒的地址居然写进了后端"
     close_settings(page)
-    assert cards(page).count() == 18, "被拒的外链工具出现在首页了"
+    assert cards(page).count() == 24, "被拒的外链工具出现在首页了"
 
 
 def phase_create(page):
@@ -185,7 +185,7 @@ def phase_create(page):
     close_settings(page)
 
     assert groups(page).count() == 7, f"新增之后分组数：{groups(page).count()}"
-    assert cards(page).count() == 19, f"新增之后卡片数：{cards(page).count()}"
+    assert cards(page).count() == 25, f"新增之后卡片数：{cards(page).count()}"
     nav = page.locator(".catalog-nav").inner_text()
     assert "外链工具" in nav, nav
     # 排在最后：内置 6 组的顺序不动（4K 首屏布局不变）
@@ -208,7 +208,7 @@ def phase_search(page):
     page.wait_for_function("() => document.querySelectorAll('.catalog-card').length === 1")
     assert NAME in cards(page).first.inner_text()
     page.locator("#tool-search").fill("")
-    page.wait_for_function("() => document.querySelectorAll('.catalog-card').length === 19")
+    page.wait_for_function("() => document.querySelectorAll('.catalog-card').length === 25")
 
 
 def phase_open(page, link_id):
@@ -252,7 +252,7 @@ def phase_edit(page):
     page.wait_for_function(
         "(name) => [...document.querySelectorAll('.catalog-card')].some(node => node.textContent.includes(name))",
         arg=RENAMED)
-    assert cards(page).count() == 19, "改名不该多出一张卡"
+    assert cards(page).count() == 25, "改名不该多出一张卡"
     assert [item["name"] for item in links_of()] == [RENAMED], "改名没落库"
 
 
@@ -329,7 +329,7 @@ def phase_embed_check(page):
     page.get_by_role("button", name="返回工具门户").click()
     page.locator(".catalog-page").wait_for(timeout=30000)
 
-    # 收尾：把这两条删掉，后面的段落接着用 19 张卡的前提
+    # 收尾：把这两条删掉，后面的段落接着用 25 张卡的前提
     open_settings(page)
     for name in (BLOCKED_NAME, DEAD_NAME):
         row = page.locator(".settings-list li").filter(has_text=name)
@@ -341,7 +341,7 @@ def phase_embed_check(page):
         page.locator(".confirm-card").wait_for(state="detached", timeout=5000)
         row.wait_for(state="detached", timeout=10000)
     close_settings(page)
-    assert cards(page).count() == 19, f"删完之后卡片数：{cards(page).count()}"
+    assert cards(page).count() == 25, f"删完之后卡片数：{cards(page).count()}"
 
 
 def phase_delete(page):
@@ -356,7 +356,7 @@ def phase_delete(page):
     assert links_of() == [], "删了之后后端还留着"
     close_settings(page)
     assert groups(page).count() == 6, f"删完之后分组数：{groups(page).count()}"
-    assert cards(page).count() == 18, f"删完之后卡片数：{cards(page).count()}"
+    assert cards(page).count() == 24, f"删完之后卡片数：{cards(page).count()}"
 
 
 def phase_missing(page):
@@ -367,7 +367,7 @@ def phase_missing(page):
     assert not page.locator("iframe.link-frame").count()
     page.evaluate("location.hash = ''")
     page.locator(".catalog-page").wait_for(timeout=30000)
-    assert cards(page).count() == 18
+    assert cards(page).count() == 24
 
 
 def main() -> int:
@@ -444,8 +444,8 @@ def main() -> int:
 
                 assert not (data / "links.json").exists() or links_of() == []
                 assert not errors, errors
-                print("PASS: 空表 6 组 18 卡 / 设置图标与 Esc / 焦点回图标 / 坏地址被挡在弹窗里"
-                      " / 新增（默认分类·第 7 组·19 卡·首字 LOGO·主题色） / 搜索命中 / 卡片进外链页"
+                print("PASS: 空表 6 组 24 卡 / 设置图标与 Esc / 焦点回图标 / 坏地址被挡在弹窗里"
+                      " / 新增（默认分类·第 7 组·25 卡·首字 LOGO·主题色） / 搜索命中 / 卡片进外链页"
                       " （hash·系统外壳·iframe src·无工具栏·框占满一屏） / 改名落库"
                       " / 嵌入检测（能嵌·不让嵌→卡片直开新窗口·连不上→未检测·「检测」按钮"
                       "·不让嵌的 hash 落地页无 iframe） / 删除（两层遮罩点得中）"

@@ -6,7 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .gjb_converter import convert
+from .gjb_converter import convert, discover
+from .local_path import resolve_directory
 
 
 class GJBTaskManager:
@@ -17,9 +18,15 @@ class GJBTaskManager:
         self.cancel_events = {}
         try: self.tasks = json.loads(self.state_file.read_text("utf-8"))
         except (FileNotFoundError, json.JSONDecodeError): self.tasks = {}
+        resume_ids = []
         for task in self.tasks.values():
-            if task["status"] in ("queued", "running"): task.update(status="failed", message="服务重启，任务已中断")
+            if task["status"] in ("queued", "running"):
+                task.update(status="queued", message="服务重启，从已转换内容继续", error=None)
+                resume_ids.append(task["id"])
         self._save()
+        for task_id in resume_ids:
+            self.cancel_events[task_id] = threading.Event()
+            self.pool.submit(self._run, task_id)
 
     def _save(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -39,30 +46,82 @@ class GJBTaskManager:
         with self.lock: self.cancel_events[task_id] = threading.Event()
         self.pool.submit(self._run, task_id); return record
 
+    def open_directory(self, source_raw: str, output_raw: str = "", in_place: bool = False):
+        source = resolve_directory(source_raw, writable=bool(in_place))
+        discover(source)
+        if in_place and str(output_raw or "").strip():
+            raise ValueError("原目录转换时不需要另填输出路径")
+        task_id, now = uuid.uuid4().hex, datetime.now(timezone.utc).isoformat()
+        if in_place:
+            output = source
+        elif str(output_raw or "").strip():
+            output = resolve_directory(output_raw, writable=True) / task_id
+        else:
+            output = self.data_dir / task_id / "output"
+        (self.data_dir / task_id).mkdir(parents=True, exist_ok=True)
+        record = {"id": task_id, "name": source.name, "status": "queued", "progress": 0, "message": "等待转换",
+                  "created_at": now, "updated_at": now, "output_dir": str(output),
+                  "request": {"crs": "", "source_path": str(source), "in_place": bool(in_place)},
+                  "result": None, "error": None}
+        with self.lock: self.tasks[task_id] = record; self._save()
+        with self.lock: self.cancel_events[task_id] = threading.Event()
+        self.pool.submit(self._run, task_id); return record
+
+    def _locations(self, task):
+        task_id = task["id"]
+        request = task.get("request") or {}
+        source = Path(request["source_path"]) if request.get("source_path") else self.data_dir / task_id / "input"
+        output = Path(task["output_dir"]) if task.get("output_dir") else self.data_dir / task_id / "output"
+        return source, output, bool(request.get("in_place"))
+
+    def _discard(self, task_id, task):
+        request = (task or {}).get("request") or {}
+        source = Path(request["source_path"]) if request.get("source_path") else None
+        output = Path(task["output_dir"]) if task and task.get("output_dir") else None
+        in_place = bool(request.get("in_place"))
+        if output and output.name == task_id and output != source and not in_place:
+            shutil.rmtree(output, ignore_errors=True)
+        sidecar = self.data_dir / task_id
+        if sidecar.name == task_id and sidecar != source:
+            shutil.rmtree(sidecar, ignore_errors=True)
+        for archive in ((output.parent / f"{task_id}.zip") if output else None, self.data_dir / f"{task_id}.zip"):
+            if archive and archive.name == f"{task_id}.zip":
+                archive.unlink(missing_ok=True)
+
     def _run(self, task_id):
-        task_dir = self.data_dir / task_id; output_dir = task_dir / "output"
         cancel_event = None
+        task_snapshot = None
         try:
             with self.lock:
                 task = self.tasks.get(task_id)
                 cancel_event = self.cancel_events.get(task_id)
                 if not task or not cancel_event: return
+                task_snapshot = json.loads(json.dumps(task))
                 crs = task["request"]["crs"]
+                source, output, in_place = self._locations(task)
             def report(a, b, message):
                 if cancel_event.is_set(): raise RuntimeError("任务已取消")
                 self._update(task_id, progress=round(a/b*95,1) if b else 0, message=message)
             self._update(task_id, status="running", message="正在解析 GJB5068 数据")
-            result = convert(task_dir / "input", output_dir, crs, report)
+            preview = self.data_dir / task_id / "preview.geojson"
+            result = convert(source, output, crs, report, preview_path=preview)
             with self.lock:
                 if cancel_event.is_set() or task_id not in self.tasks: return
-                archive = shutil.make_archive(str(task_dir), "zip", output_dir)
-                result["archive"] = Path(archive).name
-            self._update(task_id, status="completed", progress=100, message="转换完成", result=result)
+                if not in_place:
+                    if output.name == task_id:
+                        archive = shutil.make_archive(str(output.parent / task_id), "zip", output)
+                    else:
+                        archive = shutil.make_archive(str(self.data_dir / task_id), "zip", output)
+                    result["archive"] = Path(archive).name
+                    result["archive_path"] = str(Path(archive).resolve())
+                else:
+                    result["in_place"] = True
+                    result["output_dir"] = str(output)
+            self._update(task_id, status="completed", progress=100, message="转换完成" if not in_place else "已在原目录完成转换", result=result)
         except Exception as exc: self._update(task_id, status="failed", message="转换失败", error=str(exc))
         finally:
-            if cancel_event and cancel_event.is_set():
-                shutil.rmtree(task_dir, ignore_errors=True)
-                (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True)
+            if cancel_event and cancel_event.is_set() and task_snapshot:
+                self._discard(task_id, task_snapshot)
             with self.lock: self.cancel_events.pop(task_id, None)
 
     def list(self):
@@ -73,9 +132,10 @@ class GJBTaskManager:
         with self.lock:
             event = self.cancel_events.get(task_id)
             if event: event.set()
-            if not self.tasks.pop(task_id, None): return False
+            task = self.tasks.pop(task_id, None)
+            if not task: return False
             self._save()
-        shutil.rmtree(self.data_dir/task_id, ignore_errors=True); (self.data_dir/f"{task_id}.zip").unlink(missing_ok=True); return True
+        self._discard(task_id, task); return True
     def retry(self, task_id):
         with self.lock:
             task=self.tasks.get(task_id)
@@ -84,7 +144,9 @@ class GJBTaskManager:
             task["request"]["crs"] = ""
             task.update(status="queued",progress=0,message="等待重新转换",error=None,result=None); self._save()
             self.cancel_events[task_id] = threading.Event()
-        shutil.rmtree(self.data_dir/task_id/"output",ignore_errors=True)
-        (self.data_dir/task_id/"preview.geojson").unlink(missing_ok=True)
-        (self.data_dir/f"{task_id}.zip").unlink(missing_ok=True)
+            _, output, in_place = self._locations(task)
+        if not in_place:
+            for archive in (output.parent / f"{task_id}.zip" if output.name == task_id else None, self.data_dir / f"{task_id}.zip"):
+                if archive and archive.name == f"{task_id}.zip":
+                    archive.unlink(missing_ok=True)
         self.pool.submit(self._run,task_id); return task

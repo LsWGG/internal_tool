@@ -19,6 +19,10 @@ from .models import BatchCreate, CreateTask, DockerCreateTask, ESConnection, ESE
 from .task_manager import TaskManager
 from .shp_preview_manager import ShpPreviewManager
 from .tile_preview_manager import TilePreviewManager
+from .tile_jobs import TileJobManager
+from . import directory_upload
+from .raster_clip_manager import RasterClipManager
+from .vector_convert_manager import VectorConvertManager
 from .github_trending_manager import GitHubTrendingManager
 from .pdf_manager import PDFTaskManager
 from .pdf_toolbox import make_router as make_pdf_toolbox_router
@@ -28,6 +32,7 @@ from .image_convert_manager import ImageConvertManager
 from .database_manager import DatabaseClient, DatabaseTaskManager
 from .propzone_manager import PropZoneTaskManager
 from .dbx_manager import DBXManager
+from .dbx_proxy import mount_dbx_proxy
 from .crawler_manager import CrawlerTaskManager
 from .crawler_adapters import ytdlp
 from . import crawler_douyin_login
@@ -73,6 +78,12 @@ nebula_manager = NebulaTaskManager(Path(__file__).resolve().parents[1] / "nebula
                                    Path(__file__).resolve().parent / "nebula_data_util.py")
 shp_preview_manager = ShpPreviewManager(Path(__file__).resolve().parents[1] / "shp_preview_data")
 tile_preview_manager = TilePreviewManager(Path(__file__).resolve().parents[1] / "tile_preview_data")
+tile_job_manager = TileJobManager(
+    Path(__file__).resolve().parents[1] / "tile_preview_data",
+    on_directory_changed=tile_preview_manager.refresh_directory,
+)
+raster_clip_manager = RasterClipManager(Path(__file__).resolve().parents[1] / "raster_clip_data")
+vector_convert_manager = VectorConvertManager(Path(__file__).resolve().parents[1] / "vector_data")
 github_trending_manager = GitHubTrendingManager(Path(__file__).resolve().parents[1] / "github_trending_data")
 github_trending_manager.start_daily()
 pdf_manager = PDFTaskManager(Path(__file__).resolve().parents[1] / "pdf_data")
@@ -90,6 +101,7 @@ database_task_manager = DatabaseTaskManager(
 propzone_manager = PropZoneTaskManager(Path(__file__).resolve().parents[1] / "propzone_data")
 crawler_manager = CrawlerTaskManager(Path(__file__).resolve().parents[1] / "crawler_data")
 dbx_manager = DBXManager(Path(__file__).resolve().parents[1])
+mount_dbx_proxy(app, dbx_manager)
 sqlite_workspace_dir = database_task_manager.data_dir / "sqlite_workspaces"
 sqlite_workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -331,6 +343,15 @@ def execute_ai_action(payload: dict):
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         return {"message": f"已创建采集任务：{task.get('name')}。", "tool_id": tool_id, "task": crawler_manager.public_task(task)}
+    if operation == "create" and tool_id in ("raster-clip", "vector"):
+        jobs = raster_clip_manager if tool_id == "raster-clip" else vector_convert_manager
+        payload = {key: value for key, value in values.items() if key not in ("upload_dir", "shp_upload_dir")}
+        try:
+            task = jobs.create(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        label = "栅格裁切" if tool_id == "raster-clip" else "矢量转换"
+        return {"message": f"已创建{label}任务。", "tool_id": tool_id, "task": task}
 
     if operation == "query":
         if tool_id == "trending":
@@ -358,6 +379,7 @@ def execute_ai_action(payload: dict):
             "gjb": gjb_manager, "es": es_manager, "nebula": nebula_manager,
             "database": database_task_manager, "image-convert": image_convert_manager,
             "md-word": md_word_manager, "propzone": propzone_manager, "crawler": crawler_manager,
+            "raster-clip": raster_clip_manager, "vector": vector_convert_manager,
         }
         query_manager = query_managers.get(tool_id)
         if query_manager:
@@ -372,7 +394,7 @@ def execute_ai_action(payload: dict):
             summaries = []
             for task in tasks:
                 request = task.get("request") or {}
-                name = task.get("name") or (request.get("options") or {}).get("output_name") or f"任务 {task.get('id', '')[:8]}"
+                name = task.get("name") or (request.get("options") or {}).get("output_name") or request.get("source_path") or f"任务 {task.get('id', '')[:8]}"
                 progress = task.get("progress")
                 summaries.append({"id": task.get("id"), "name": name, "status": task.get("status"), "progress": progress, "message": task.get("message"), "error": task.get("error")})
 
@@ -386,6 +408,35 @@ def execute_ai_action(payload: dict):
             layers = shp_preview_manager.list()
             return {"message": f"当前已加载 {len(layers)} 个 SHP 图层。", "tool_id": tool_id, "layers": layers}
         return {"message": "该工具的数据保存在浏览器当前页面中，已为你打开对应页面。", "tool_id": tool_id}
+
+    if tool_id in ("raster-clip", "vector") and operation in ("control", "export"):
+        jobs = raster_clip_manager if tool_id == "raster-clip" else vector_convert_manager
+        task_id = values["task_id"]
+        if operation == "export":
+            task = jobs.get(task_id)
+            if not task:
+                raise HTTPException(404, "任务不存在")
+            if task.get("status") != "completed":
+                raise HTTPException(409, "任务尚未完成，暂时不能下载")
+            result = task.get("result") if isinstance(task.get("result"), dict) else {}
+            archive = result.get("archive_path")
+            path = Path(archive) if archive else None
+            if not path or path.suffix.lower() != ".zip" or not path.is_file():
+                raise HTTPException(404, "该任务结果在外接目录，没有压缩包")
+            prefix = "/api/raster-clip/tasks" if tool_id == "raster-clip" else "/api/vector/tasks"
+            return {"message": "结果已准备好，可以下载。", "tool_id": tool_id, "task": task, "download_url": f"{prefix}/{task_id}/export"}
+        control = values["action"]
+        try:
+            if control == "delete":
+                if not jobs.delete(task_id):
+                    raise HTTPException(404, "任务不存在")
+                return {"message": "任务已删除。没有删除用户提供的目录。", "tool_id": tool_id, "deleted": True}
+            task = getattr(jobs, control)(task_id)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not task:
+            raise HTTPException(404, "任务不存在")
+        return {"message": "任务操作已执行。", "tool_id": tool_id, "task": task}
 
     task_manager = manager if tool_id == "map" else pdf_manager if tool_id == "pdf" else None
     if task_manager is None:
@@ -949,6 +1000,14 @@ def refresh_github_trending_report():
 def list_shp_preview_layers(): return shp_preview_manager.list()
 
 
+@app.post("/api/shp-preview/layers/open", status_code=201)
+def open_shp_preview_layers(payload: dict):
+    try:
+        return shp_preview_manager.open_directory(str(payload.get("path") or ""))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/shp-preview/layers", status_code=201)
 async def create_shp_preview_layers(files: list[UploadFile] = File(...)):
     upload_root = shp_preview_manager.data_dir / f"upload-{__import__('uuid').uuid4().hex}"
@@ -1001,6 +1060,18 @@ def list_tile_preview_layers():
     return tile_preview_manager.list()
 
 
+@app.post("/api/tile-preview/layers/open", status_code=201)
+def open_tile_preview_layer(payload: dict):
+    try:
+        path = str(payload.get("path") or "")
+        name = str(payload.get("name") or "")
+        if path.strip().lower().endswith(".mbtiles"):
+            return tile_preview_manager.open_mbtiles(path, name)
+        return tile_preview_manager.open_directory(path, name)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/tile-preview/layers", status_code=201)
 async def create_tile_preview_layer(files: list[UploadFile] = File(...), name: str = Form("")):
     upload_root = tile_preview_manager.data_dir / f"upload-{__import__('uuid').uuid4().hex}"
@@ -1043,6 +1114,156 @@ def get_tile_preview_tile(layer_id: str, z: int, x: int, y: int):
 def delete_tile_preview_layer(layer_id: str):
     if not tile_preview_manager.delete(layer_id):
         raise HTTPException(404, "瓦片图层不存在")
+
+
+def _form_flag(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _form_bounds(west: str, south: str, east: str, north: str) -> dict:
+    raw = {"west": west, "south": south, "east": east, "north": north}
+    present = {key: str(value).strip() for key, value in raw.items() if str(value or "").strip()}
+    if not present:
+        return {}
+    if len(present) != 4:
+        raise ValueError("范围需要同时填写西、南、东、北")
+    try:
+        return {key: float(present[key]) for key in raw}
+    except ValueError as exc:
+        raise ValueError("范围坐标无效") from exc
+
+
+def _drop_upload(data_dir: Path, *roots):
+    for root in roots:
+        if root is not None:
+            directory_upload.remove_upload(data_dir, str(root))
+
+
+@app.post("/api/raster-clip/uploads", status_code=201)
+async def upload_raster_clip(
+    files: list[UploadFile] = File(...),
+    shp_files: list[UploadFile] = File(default=[]),
+    output_path: str = Form(""),
+    in_place: str = Form("false"),
+    west: str = Form(""),
+    south: str = Form(""),
+    east: str = Form(""),
+    north: str = Form(""),
+):
+    source_root = None
+    shp_root = None
+    done = False
+    try:
+        source_root = directory_upload.new_upload(raster_clip_manager.data_dir)
+        await directory_upload.save_members(
+            source_root, files, directory_upload.RASTER_SUFFIXES, extra_names=frozenset({".tile-scheme"}),
+        )
+        source = directory_upload.raster_source(directory_upload.unwrap_upload(source_root))
+        payload = {
+            "source_path": str(source),
+            "upload_dir": str(source_root.resolve()),
+            "output_path": "" if _form_flag(in_place) else str(output_path or "").strip(),
+            "in_place": _form_flag(in_place),
+        }
+        if shp_files:
+            shp_root = directory_upload.new_upload(raster_clip_manager.data_dir)
+            await directory_upload.save_members(shp_root, shp_files, directory_upload.SHAPE_SUFFIXES)
+            payload["shp_path"] = str(directory_upload.shapefile_source(directory_upload.unwrap_upload(shp_root)))
+            payload["shp_upload_dir"] = str(shp_root.resolve())
+        payload.update(_form_bounds(west, south, east, north))
+        task = raster_clip_manager.create(payload)
+        done = True
+        return task
+    except directory_upload.UploadTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        if not done:
+            _drop_upload(raster_clip_manager.data_dir, source_root, shp_root)
+
+
+@app.post("/api/vector/uploads", status_code=201)
+async def upload_vector_convert(
+    files: list[UploadFile] = File(...),
+    target_format: str = Form(...),
+    output_path: str = Form(""),
+    in_place: str = Form("false"),
+):
+    source_root = None
+    done = False
+    try:
+        source_root = directory_upload.new_upload(vector_convert_manager.data_dir)
+        await directory_upload.save_members(source_root, files, directory_upload.VECTOR_SUFFIXES)
+        source = directory_upload.unwrap_upload(source_root)
+        task = vector_convert_manager.create({
+            "source_path": str(source),
+            "upload_dir": str(source_root.resolve()),
+            "target_format": target_format,
+            "output_path": "" if _form_flag(in_place) else str(output_path or "").strip(),
+            "in_place": _form_flag(in_place),
+        })
+        done = True
+        return task
+    except directory_upload.UploadTooLarge as exc:
+        raise HTTPException(413, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        if not done:
+            _drop_upload(vector_convert_manager.data_dir, source_root)
+
+
+def _mount_path_jobs(prefix: str, jobs, slug: str):
+    @app.get(prefix, name=f"{slug}_list")
+    def list_jobs():
+        return jobs.list()
+
+    @app.post(prefix, status_code=201, name=f"{slug}_create")
+    def create_job(payload: dict):
+        try:
+            return jobs.create(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post(prefix + "/{task_id}/{action}", name=f"{slug}_action")
+    def control_job(task_id: str, action: str):
+        try:
+            if action == "pause":
+                task = jobs.pause(task_id)
+            elif action == "resume":
+                task = jobs.resume(task_id)
+            elif action == "retry":
+                task = jobs.retry(task_id)
+            else:
+                raise HTTPException(404, "操作不存在")
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        if not task:
+            raise HTTPException(404, "任务不存在")
+        return task
+
+    @app.delete(prefix + "/{task_id}", status_code=204, name=f"{slug}_delete")
+    def delete_job(task_id: str):
+        if not jobs.delete(task_id):
+            raise HTTPException(404, "任务不存在")
+
+    @app.get(prefix + "/{task_id}/export", name=f"{slug}_export")
+    def export_job(task_id: str):
+        task = jobs.get(task_id)
+        if not task:
+            raise HTTPException(404, "任务不存在")
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        archive = result.get("archive_path")
+        path = Path(archive) if archive else None
+        if not path or path.suffix.lower() != ".zip" or not path.is_file():
+            raise HTTPException(404, "该任务结果在外接目录，没有压缩包")
+        return FileResponse(path, filename=path.name)
+
+
+_mount_path_jobs("/api/tile-preview/jobs", tile_job_manager, "tile_jobs")
+_mount_path_jobs("/api/raster-clip/tasks", raster_clip_manager, "raster_clip")
+_mount_path_jobs("/api/vector/tasks", vector_convert_manager, "vector_convert")
 
 
 @app.get("/api/regions/search")
@@ -1149,7 +1370,7 @@ def list_propzone_tasks():
 @app.post("/api/propzone/tasks", status_code=202)
 def create_propzone_task(payload: dict):
     try:
-        return propzone_manager.create(payload.get("areas") or [], payload.get("level", "all"))
+        return propzone_manager.create(payload.get("areas") or [], payload.get("level", "all"), payload.get("download_path") or "")
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1186,7 +1407,10 @@ def preview_propzone_task(task_id: str):
     task = propzone_manager.get(task_id)
     if not task or task.get("status") != "completed":
         raise HTTPException(404, "任务未完成或不存在")
-    path = propzone_manager.data_dir / task_id / "preview.geojson"
+    base = Path(task.get("output_dir") or "")
+    if base.name != task_id:
+        base = propzone_manager.data_dir / task_id
+    path = base / "preview.geojson"
     if not path.is_file():
         raise HTTPException(404, "预览文件不存在")
     return FileResponse(path, media_type="application/geo+json")
@@ -1197,10 +1421,13 @@ def export_propzone_task(task_id: str):
     task = propzone_manager.get(task_id)
     if not task or task.get("status") != "completed" or not task.get("result", {}).get("archive"):
         raise HTTPException(404, "任务未完成或不存在")
-    path = propzone_manager.data_dir / task_id / task["result"]["archive"]
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    path = Path(result.get("archive_path") or "")
+    if not path.is_file() or path.name != f"{task_id}.zip":
+        path = propzone_manager.data_dir / task_id / result.get("archive", "")
     if not path.is_file():
-        path = propzone_manager.data_dir / task["result"]["archive"]
-    if not path.is_file():
+        path = propzone_manager.data_dir / result.get("archive", "")
+    if not path.is_file() or (path.name != f"{task_id}.zip" and path.parent.name != task_id):
         raise HTTPException(404, "SHP 文件不存在")
     return FileResponse(path, media_type="application/zip", filename=f"{task['name']}_{task_id[:8]}.zip")
 
@@ -1212,12 +1439,20 @@ def list_tasks():
 
 @app.post("/api/tasks", status_code=202)
 def create_task(request: CreateTask):
-    return manager.create(request)
+    try:
+        return manager.create(request)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/tasks/batch", status_code=202)
 def create_batch(request: BatchCreate):
-    return [manager.create(item) for item in request.tasks]
+    try:
+        for item in request.tasks:
+            manager.prepare(item)
+        return [manager.create(item) for item in request.tasks]
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.get("/api/tasks/{task_id}")
@@ -1272,7 +1507,12 @@ def export_task(task_id: str):
     task = manager.get(task_id)
     if not task or task["status"] != "completed":
         raise HTTPException(404, "任务未完成或不存在")
-    path = manager.data_dir / f"{task_id}.zip"
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    path = Path(result.get("archive_path") or "")
+    if not path.is_file() or path.name != f"{task_id}.zip":
+        path = manager.data_dir / f"{task_id}.zip"
+    if not path.is_file():
+        raise HTTPException(404, "压缩包不存在")
     return FileResponse(path, filename=f"{task['request']['options']['output_name']}_{task_id[:8]}.zip")
 
 
@@ -1336,6 +1576,16 @@ def export_docker_task(task_id: str):
 def list_gjb_tasks(): return gjb_manager.list()
 
 
+@app.post("/api/gjb/tasks/open", status_code=202)
+def open_gjb_task(payload: dict):
+    if payload.get("crs", "auto") not in ("auto", "", None):
+        raise HTTPException(400, "GJB 坐标系必须根据 SMS 自动识别，暂不支持仅修改坐标系声明")
+    try:
+        return gjb_manager.open_directory(str(payload.get("source_path") or ""), str(payload.get("output_path") or ""), bool(payload.get("in_place")))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/gjb/tasks", status_code=202)
 async def create_gjb_task(files: list[UploadFile] = File(...), crs: str = Form("auto")):
     if crs != "auto": raise HTTPException(400, "GJB 坐标系必须根据 SMS 自动识别，暂不支持仅修改坐标系声明")
@@ -1396,7 +1646,15 @@ def preview_gjb_task(task_id: str):
 def export_gjb_task(task_id: str):
     task = gjb_manager.get(task_id)
     if not task or task["status"] != "completed": raise HTTPException(404, "任务未完成或不存在")
-    return FileResponse(gjb_manager.data_dir/f"{task_id}.zip", filename=f"{task['name']}_shapefile.zip")
+    if (task.get("request") or {}).get("in_place") or (task.get("result") or {}).get("in_place"):
+        raise HTTPException(404, "结果已写在原目录，无需下载")
+    result = task.get("result") if isinstance(task.get("result"), dict) else {}
+    path = Path(result.get("archive_path") or "")
+    if not path.is_file() or path.name != f"{task_id}.zip":
+        path = gjb_manager.data_dir / f"{task_id}.zip"
+    if not path.is_file():
+        raise HTTPException(404, "压缩包不存在")
+    return FileResponse(path, filename=f"{task['name']}_shapefile.zip")
 
 
 @app.post("/api/es/connect")

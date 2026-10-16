@@ -4,7 +4,9 @@ The registry is deliberately independent from FastAPI and the task managers.  It
 describes what the portal can do; execution adapters remain in ``main.py`` where
 the already-created manager instances live.
 """
+import math
 from copy import deepcopy
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -30,7 +32,11 @@ MAP_PARAMETERS = {
     "zoom_min": {"type": "integer", "minimum": 0, "maximum": 20},
     "zoom_max": {"type": "integer", "minimum": 0, "maximum": 20},
     "output_format": {"type": "string", "enum": ["png", "tif"]},
+    "png_width": {"type": "integer", "minimum": 0, "maximum": 8192, "description": "PNG 自定义宽度。与 png_height 同时为 0 时保存原始 z/x/y 瓦片。"},
+    "png_height": {"type": "integer", "minimum": 0, "maximum": 8192, "description": "PNG 自定义高度。必须与宽度同时填写或同时留空。"},
+    "download_path": {"type": "string", "maxLength": 4096, "description": "服务器上已挂载目录的绝对路径。留空则使用工具本地目录。"},
     "max_workers": {"type": "integer", "minimum": 1, "maximum": 16},
+    "pack_mbtiles": {"type": "boolean", "description": "PNG 导出时额外写入 MBTiles。已写入的瓦片会跳过。"},
 }
 
 CRAWLER_PARAMETERS = {
@@ -88,7 +94,7 @@ def _manual(tool_id, name, description, *, uploads=False, credentials=False):
 
 CAPABILITIES = {
     "map": {
-        "id": "map", "name": "卫星地图下载", "description": "按行政区下载影像或 DEM，输出 PNG 瓦片或 GeoTIFF。",
+        "id": "map", "name": "卫星地图下载", "description": "按行政区下载影像或 DEM，输出 PNG 瓦片或 GeoTIFF。PNG 影像可以同时打包为 MBTiles。",
         "constraints": ["DEM 仅使用 aws_terrarium、仅输出 tif、最高 Z15", "高德最高 Z18", "其他影像最高 Z20"],
         "actions": {
             "navigate": {"confirmation": "none"},
@@ -99,7 +105,31 @@ CAPABILITIES = {
             "export": {"schema": TASK_ID, "confirmation": "none", "adapter": "map.export", "label": "获取下载文件"},
         },
     },
-    "tile-viewer": _manual("tile-viewer", "地图瓦片查看", "加载在线 XYZ 链接或上传 z/x/y 瓦片目录进行地图预览。", uploads=True),
+    "tile-viewer": _manual("tile-viewer", "地图瓦片查看", "加载在线 XYZ 链接或 z/x/y 瓦片目录，打包或拆包 MBTiles，并在 XYZ、TMS、WMTS 之间转换。", uploads=True),
+    "raster-clip": {
+        "id": "raster-clip", "name": "栅格裁切", "description": "用 Shapefile 或框选范围裁切 GeoTIFF、DEM 和瓦片目录。可以填写服务器路径，也可以在页面上传目录。",
+        "constraints": ["创建任务只能使用服务器上的绝对路径；浏览器目录上传要在页面操作", "Shapefile 优先于经纬度范围", "瓦片目录不能在原位置裁切", "只有单个 GeoTIFF 可以写在原文件旁边，且不覆盖源文件"],
+        "actions": {
+            "navigate": {"confirmation": "none"},
+            "configure": {"schema": _object({"source_path": {"type": "string", "maxLength": 4096}, "shp_path": {"type": "string", "maxLength": 4096}, "output_path": {"type": "string", "maxLength": 4096}, "in_place": {"type": "boolean"}, "west": {"type": "number"}, "south": {"type": "number"}, "east": {"type": "number"}, "north": {"type": "number"}}), "confirmation": "none"},
+            "create": {"schema": _object({"source_path": {"type": "string", "maxLength": 4096}, "shp_path": {"type": "string", "maxLength": 4096}, "output_path": {"type": "string", "maxLength": 4096}, "in_place": {"type": "boolean"}, "west": {"type": "number"}, "south": {"type": "number"}, "east": {"type": "number"}, "north": {"type": "number"}}, ("source_path",)), "confirmation": "required", "adapter": "raster-clip.create", "label": "确认并开始裁切"},
+            "control": {"schema": TASK_CONTROL, "confirmation": "required", "adapter": "raster-clip.control", "label": "确认任务操作"},
+            "query": {"schema": _object({"task_id": {"type": "string", "minLength": 8}}), "confirmation": "none", "adapter": "raster-clip.query", "label": "查询任务"},
+            "export": {"schema": TASK_ID, "confirmation": "none", "adapter": "raster-clip.export", "label": "获取下载文件"},
+        },
+    },
+    "vector": {
+        "id": "vector", "name": "矢量格式转换", "description": "GeoJSON、KML、GPKG、DXF 与 SHP 互转。可以填写服务器目录，也可以在页面上传一个目录。坐标系自动识别，SHP 结果可在现有预览里打开。",
+        "constraints": ["创建任务只能使用服务器上的绝对路径；浏览器目录上传要在页面操作", "一次只转换一个目录，不进入子目录", "读不到坐标系时失败，提示「无法识别坐标系」", "KML 写出为 EPSG:4326", "DXF 可能丢掉属性", "不能覆盖源文件"],
+        "actions": {
+            "navigate": {"confirmation": "none"},
+            "configure": {"schema": _object({"source_path": {"type": "string", "maxLength": 4096}, "output_path": {"type": "string", "maxLength": 4096}, "in_place": {"type": "boolean"}, "target_format": {"type": "string", "enum": ["shp", "geojson", "kml", "gpkg", "dxf"]}}), "confirmation": "none"},
+            "create": {"schema": _object({"source_path": {"type": "string", "maxLength": 4096}, "output_path": {"type": "string", "maxLength": 4096}, "in_place": {"type": "boolean"}, "target_format": {"type": "string", "enum": ["shp", "geojson", "kml", "gpkg", "dxf"]}}, ("source_path", "target_format")), "confirmation": "required", "adapter": "vector.create", "label": "确认并开始转换"},
+            "control": {"schema": TASK_CONTROL, "confirmation": "required", "adapter": "vector.control", "label": "确认任务操作"},
+            "query": {"schema": _object({"task_id": {"type": "string", "minLength": 8}}), "confirmation": "none", "adapter": "vector.query", "label": "查询任务"},
+            "export": {"schema": TASK_ID, "confirmation": "none", "adapter": "vector.export", "label": "获取下载文件"},
+        },
+    },
     "pdf": {
         "id": "pdf", "name": "网页转 PDF", "description": "将一个或多个公开网页转换为 A4 PDF。",
         "actions": {
@@ -143,6 +173,14 @@ CAPABILITIES = {
 JSON_PARAMETERS = {'format': {'type':'string','enum':['yaml','csv','jsonl','minify','json']}, 'text': {'type':'string','maxLength':20000}, 'mode': {'type':'string','enum':['formatted','tree','table','query','convert','diff']}, 'path': {'type':'string','maxLength':500}, 'comparison': {'type':'string','maxLength':20000}}
 CAPABILITIES['json']['actions']['configure'] = {'schema':_object(JSON_PARAMETERS), 'confirmation':'none'}
 GENERIC_PARAMETER_PROPERTIES.update(JSON_PARAMETERS)
+GENERIC_PARAMETER_PROPERTIES.update({
+    "source_path": {"type": "string", "maxLength": 4096, "description": "服务器上的绝对路径。浏览器目录上传请在页面操作。"},
+    "shp_path": {"type": "string", "maxLength": 4096, "description": "裁切用 Shapefile 的绝对路径，优先于经纬度范围。"},
+    "output_path": {"type": "string", "maxLength": 4096, "description": "输出目录的绝对路径。原位置处理时留空。"},
+    "in_place": {"type": "boolean", "description": "栅格写在原 GeoTIFF 旁边，或矢量写回源目录。不覆盖源文件。"},
+    "west": {"type": "number"}, "south": {"type": "number"}, "east": {"type": "number"}, "north": {"type": "number"},
+    "target_format": {"type": "string", "enum": ["shp", "geojson", "kml", "gpkg", "dxf"], "description": "矢量转换的目标格式。"},
+})
 
 PAGE_PARAMETERS = _object({
     'revision': {'type':'string','minLength':1},
@@ -157,11 +195,11 @@ for capability in CAPABILITIES.values():
 GENERIC_FUNCTIONS = [
     {"type": "function", "function": {"name": "respond_to_user", "description": "无需打开工具、配置或执行操作时，直接回答用户的问题。", "parameters": _object({"answer": {"type": "string", "minLength": 1, "maxLength": 12000}, "suggestions": {"type": "array", "items": {"type": "string"}, "maxItems": 3}}, ("answer",))}},
     {"type": "function", "function": {"name": "navigate_tool", "description": "打开最适合用户需求的门户工具页面。仅在用户要求进入页面、需要上传文件或补充配置时使用。", "parameters": _object({"tool_id": {"type": "string", "enum": list(CAPABILITIES)}} , ("tool_id",))}},
-    {"type": "function", "function": {"name": "configure_tool", "description": "将明确的配置值填入工具页面；支持地图、网页转 PDF、网页采集和 JSON 工具配置。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler", "json"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
-    {"type": "function", "function": {"name": "create_task", "description": "用户明确要求执行地图下载、网页转 PDF 或公开数据采集时使用。采集任务需要选择 crawler 并提供 source、目标 URL/关键词、数量和保存格式；系统会要求用户确认。榜单查看等只读请求绝不能使用。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
-    {"type": "function", "function": {"name": "control_task", "description": "暂停、继续、重试或删除地图/PDF 已有任务。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf"]}, "task_id": {"type": "string"}, "action": {"type": "string", "enum": ["pause", "resume", "retry", "delete"]}}, ("tool_id", "task_id", "action"))}},
+    {"type": "function", "function": {"name": "configure_tool", "description": "将明确的配置值填入工具页面；支持地图、网页转 PDF、网页采集、JSON、栅格裁切和矢量格式转换。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler", "json", "raster-clip", "vector"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
+    {"type": "function", "function": {"name": "create_task", "description": "用户明确要求执行地图下载、网页转 PDF、公开数据采集、栅格裁切或矢量格式转换时使用。栅格和矢量需要服务器上的绝对路径；浏览器里的目录上传请让用户在页面操作。采集任务需要选择 crawler 并提供 source、目标 URL/关键词、数量和保存格式；系统会要求用户确认。榜单查看等只读请求绝不能使用。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "crawler", "raster-clip", "vector"]}, "parameters": _object(GENERIC_PARAMETER_PROPERTIES)}, ("tool_id", "parameters"))}},
+    {"type": "function", "function": {"name": "control_task", "description": "暂停、继续、重试或删除地图、PDF、栅格裁切或矢量转换的已有任务。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "raster-clip", "vector"]}, "task_id": {"type": "string"}, "action": {"type": "string", "enum": ["pause", "resume", "retry", "delete"]}}, ("tool_id", "task_id", "action"))}},
     {"type": "function", "function": {"name": "query_tool", "description": "读取工具的真实数据或任务状态。用户询问榜单、任务、结果、进度或当前数据时使用；没有任务 ID 时返回最近记录。", "parameters": _object({"tool_id": {"type": "string", "enum": list(CAPABILITIES)}, "parameters": _object({"task_id": {"type": "string", "minLength": 8}, "date": {"type": "string", "maxLength": 10}})}, ("tool_id",))}},
-    {"type": "function", "function": {"name": "export_result", "description": "获取地图/PDF 已完成任务的下载地址。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf"]}, "task_id": {"type": "string"}}, ("tool_id", "task_id"))}},
+    {"type": "function", "function": {"name": "export_result", "description": "获取地图、PDF、栅格裁切或矢量转换已完成任务的下载地址。结果在外接目录时没有压缩包。", "parameters": _object({"tool_id": {"type": "string", "enum": ["map", "pdf", "raster-clip", "vector"]}, "task_id": {"type": "string"}}, ("tool_id", "task_id"))}},
     {"type":"function","function":{"name":"operate_page","description":"操作当前工具页面真实控件。只允许使用页面快照中的 revision 与 control_id，每次填写一个字段或点击一个按钮；缺少文件须让用户上传。不得猜测控件 ID。","parameters":_object({'tool_id':{'type':'string','enum':list(CAPABILITIES)},'parameters':PAGE_PARAMETERS},('tool_id','parameters'))}},
 ]
 
@@ -221,9 +259,25 @@ def _validate_value(value, schema, path):
             raise ValueError(f"{path} 超出允许范围")
     elif kind == "boolean" and not isinstance(value, bool):
         raise ValueError(f"{path} 必须是布尔值")
+    elif kind == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{path} 必须是数字")
+        if not math.isfinite(float(value)):
+            raise ValueError(f"{path} 超出允许范围")
     if "enum" in schema and value not in schema["enum"]:
         raise ValueError(f"{path} 的值不受支持")
     return value
+
+
+def _absolute_server_path(value, label):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if any(char in text for char in ("\x00", "\n", "\r")):
+        raise ValueError("路径无效")
+    if not Path(text).expanduser().is_absolute():
+        raise ValueError(f"{label}必须是服务器上的绝对路径")
+    return text
 
 
 def validate_action(operation, tool_id, parameters=None):
@@ -245,6 +299,17 @@ def validate_action(operation, tool_id, parameters=None):
             raise ValueError(f"所选数据源仅支持 Z{min_zoom}–Z{max_zoom}")
         if values.get("data_type") == "dem" and (source != "aws_terrarium" or values.get("output_format") not in (None, "tif")):
             raise ValueError("DEM 仅支持 AWS Terrarium 数据源和 GeoTIFF 输出")
+        width = int(values.get("png_width") or 0)
+        height = int(values.get("png_height") or 0)
+        if (width == 0) != (height == 0):
+            raise ValueError("PNG 自定义尺寸需要同时设置宽度和高度，或都留空以保存原始瓦片")
+        if width and (width < 64 or height < 64):
+            raise ValueError("PNG 自定义尺寸至少为 64 像素")
+        download_path = str(values.get("download_path") or "").strip()
+        if download_path and not Path(download_path).expanduser().is_absolute():
+            raise ValueError("下载路径必须是服务器上的绝对路径")
+        if values.get("pack_mbtiles") and (values.get("data_type") == "dem" or ("output_format" in values and values.get("output_format") != "png")):
+            raise ValueError("只有 PNG 影像可以打包为 MBTiles")
     if tool_id == "crawler" and operation in ("configure", "create"):
         urls = values.get("urls") or []
         maximum = values.get("max_items")
@@ -252,6 +317,21 @@ def validate_action(operation, tool_id, parameters=None):
             raise ValueError("网页和分页列表采集必须提供至少一个入口 URL")
         if values.get("source") == "generic" and maximum not in (None, -1) and maximum > len(urls) and len(urls) <= 1:
             raise ValueError("generic 只采集明确提供的独立页面，无法从单个入口发现多条记录；列表、排行、分类或分页任务应改用 source=news，并使用列表首页 URL")
+    if tool_id in ("raster-clip", "vector") and operation in ("configure", "create"):
+        _absolute_server_path(values.get("source_path"), "源路径")
+        _absolute_server_path(values.get("shp_path"), "Shapefile")
+        _absolute_server_path(values.get("output_path"), "输出路径")
+        if values.get("in_place") and str(values.get("output_path") or "").strip():
+            raise ValueError("原文件裁切时不需要另填输出路径" if tool_id == "raster-clip" else "原目录转换时不需要另填输出路径")
+    if tool_id == "raster-clip" and operation in ("configure", "create"):
+        bounds = [values.get(key) for key in ("west", "south", "east", "north")]
+        present = [item is not None for item in bounds]
+        if any(present) and not all(present):
+            raise ValueError("范围需要同时填写西、南、东、北")
+        if all(present) and (bounds[0] >= bounds[2] or bounds[1] >= bounds[3]):
+            raise ValueError("范围坐标无效")
+        if operation == "create" and not str(values.get("shp_path") or "").strip() and not all(present):
+            raise ValueError("请提供 Shapefile 或框选范围")
     return {
         "operation": operation, "tool_id": tool_id, "parameters": values,
         "requires_confirmation": action.get("confirmation") == "required",

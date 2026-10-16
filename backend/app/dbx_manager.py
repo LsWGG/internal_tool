@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import os
 import platform
+import re
+import signal
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import requests
+
+# DBX refuses to keep a SameSite=Lax session inside a cross-site iframe.
+# Mounting it at this path on the tool's own origin makes the cookie first-party.
+EMBED_PREFIX = "/dbx"
 
 
 class DBXManager:
@@ -26,6 +33,10 @@ class DBXManager:
     def url(self) -> str:
         return f"http://127.0.0.1:{self.port}"
 
+    @property
+    def embed_path(self) -> str:
+        return f"{EMBED_PREFIX}/"
+
     def architecture(self) -> str:
         machine = platform.machine().lower()
         if machine in {"x86_64", "amd64"}:
@@ -40,9 +51,48 @@ class DBXManager:
 
     def _reachable(self) -> bool:
         try:
-            return requests.get(self.url, timeout=(0.5, 1.5)).ok
+            return requests.get(f"{self.url}{EMBED_PREFIX}/api/auth/check", timeout=(0.5, 1.5)).ok
         except requests.RequestException:
             return False
+
+    def _dbx_pids_on_port(self) -> list[int]:
+        try:
+            output = subprocess.check_output(
+                ["ss", "-H", "-ltnp", f"sport = :{self.port}"],
+                text=True, stderr=subprocess.DEVNULL,
+            )
+        except (OSError, subprocess.CalledProcessError):
+            return []
+        pids = []
+        for pid_text in re.findall(r"pid=(\d+)", output):
+            pid = int(pid_text)
+            try:
+                command = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+            except OSError:
+                continue
+            if "dbx-web-bin" in command or command.strip().endswith("/dbx"):
+                pids.append(pid)
+        return pids
+
+    def _stop_stale_dbx(self) -> None:
+        """Replace a DBX that is still bound to this port but not serving /dbx."""
+        self.stop()
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            pids = self._dbx_pids_on_port()
+            if not pids:
+                return
+            for pid in pids:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
+            time.sleep(0.1)
+        for pid in self._dbx_pids_on_port():
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
     def start(self) -> dict:
         with self.lock:
@@ -61,8 +111,13 @@ class DBXManager:
                 return self.status()
 
             self.data_dir.mkdir(parents=True, exist_ok=True)
+            self._stop_stale_dbx()
             environment = os.environ.copy()
-            environment.update({"DBX_PORT": str(self.port), "DBX_DATA_DIR": str(self.data_dir)})
+            environment.update({
+                "DBX_PORT": str(self.port),
+                "DBX_DATA_DIR": str(self.data_dir),
+                "DBX_PUBLIC_BASE_PATH": EMBED_PREFIX,
+            })
             try:
                 self.process = subprocess.Popen(
                     [str(launcher)], cwd=package, env=environment,
@@ -84,6 +139,7 @@ class DBXManager:
                 "running": reachable,
                 "starting": bool(self.process and self.process.poll() is None and not reachable),
                 "url": self.url,
+                "embed_path": self.embed_path,
                 "architecture": self.architecture() or platform.machine(),
                 "error": self.error,
             }

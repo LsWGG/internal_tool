@@ -22,4 +22,26 @@ class DBXManagerTests(unittest.TestCase):
             ):
                 state = manager.start()
             self.assertFalse(state["running"])
+            self.assertEqual(state["embed_path"], "/dbx/")
             self.assertIn("未找到 linux-x64 对应的 DBX 安装包", state["error"])
+
+    def test_launch_serves_dbx_on_the_same_origin_prefix(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            package = root / "vendor" / "dbx" / "linux-x64"
+            package.mkdir(parents=True)
+            launcher = package / "dbx"
+            launcher.write_text("#!/bin/sh\nexit 0\n")
+            launcher.chmod(0o755)
+            manager = DBXManager(root, port=4291)
+            with patch.object(manager, "_reachable", return_value=False), patch.object(
+                manager, "_stop_stale_dbx"
+            ), patch("app.dbx_manager.platform.machine", return_value="x86_64"), patch(
+                "app.dbx_manager.subprocess.Popen"
+            ) as popen:
+                popen.return_value.poll.return_value = None
+                popen.return_value.stderr = None
+                manager.start()
+            environment = popen.call_args.kwargs["env"]
+            self.assertEqual(environment["DBX_PUBLIC_BASE_PATH"], "/dbx")
+            self.assertEqual(environment["DBX_PORT"], "4291")

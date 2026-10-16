@@ -8,6 +8,8 @@ from pathlib import Path
 import shapefile
 from pyproj import CRS, Transformer
 
+from .local_path import resolve_directory
+
 
 class ShpPreviewManager:
     def __init__(self, data_dir: Path):
@@ -62,7 +64,12 @@ class ShpPreviewManager:
             return {"type": "Polygon", "coordinates": rings} if rings else None
         return None
 
-    def create(self, group_dir: Path, stem: str):
+    def _write_preview(self, directory: Path, features):
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "preview.geojson").write_text(json.dumps(
+            {"type": "FeatureCollection", "features": features}, ensure_ascii=False, default=str), "utf-8")
+
+    def _load_group(self, group_dir: Path, stem: str):
         shp_path = group_dir / f"{stem}.shp"
         dbf_path = group_dir / f"{stem}.dbf"
         shx_path = group_dir / f"{stem}.shx"
@@ -103,19 +110,46 @@ class ShpPreviewManager:
             if isinstance(exc, ValueError) and str(exc).startswith(stem):
                 raise
             raise ValueError(f"{stem}.shp 读取失败：{exc}") from exc
+        return features, reader.shapeTypeName, source_crs.to_string(), bounds
+
+    def create(self, group_dir: Path, stem: str):
+        features, shape_type, crs, bounds = self._load_group(group_dir, stem)
         layer_id = uuid.uuid4().hex
         target = self.data_dir / layer_id
         shutil.move(str(group_dir), target)
-        (target / "preview.geojson").write_text(json.dumps(
-            {"type": "FeatureCollection", "features": features}, ensure_ascii=False, default=str), "utf-8")
+        self._write_preview(target, features)
         now = datetime.now(timezone.utc).isoformat()
         record = {"id": layer_id, "name": stem, "feature_count": len(features),
-                  "shape_type": reader.shapeTypeName, "crs": source_crs.to_string(),
-                  "bounds": bounds, "created_at": now}
+                  "shape_type": shape_type, "crs": crs, "bounds": bounds, "created_at": now}
         with self.lock:
             self.layers[layer_id] = record
             self._save()
         return record
+
+    def open_directory(self, raw: str):
+        root = resolve_directory(raw)
+        stems = sorted({path.stem for path in root.iterdir() if path.is_file() and path.suffix.lower() == ".shp"})
+        if not stems:
+            raise ValueError("目录中没有 SHP 文件")
+        created = []
+        try:
+            for stem in stems:
+                features, shape_type, crs, bounds = self._load_group(root, stem)
+                layer_id = uuid.uuid4().hex
+                self._write_preview(self.data_dir / layer_id, features)
+                now = datetime.now(timezone.utc).isoformat()
+                record = {"id": layer_id, "name": stem, "feature_count": len(features),
+                          "shape_type": shape_type, "crs": crs, "bounds": bounds, "created_at": now,
+                          "external": True, "source_path": str(root)}
+                with self.lock:
+                    self.layers[layer_id] = record
+                    self._save()
+                created.append(record)
+        except Exception:
+            for item in created:
+                self.delete(item["id"])
+            raise
+        return created
 
     def list(self):
         with self.lock:

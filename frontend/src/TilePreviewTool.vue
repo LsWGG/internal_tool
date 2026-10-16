@@ -6,13 +6,20 @@ import {tileSources} from './tileSources'
 
 const props=defineProps({confirmAction:{type:Function,default:null}})
 const emit=defineEmits(['notify'])
-const mapEl=ref(),mode=ref('online'),url=ref(''),name=ref(''),minZoom=ref(0),maxZoom=ref(20),opacity=ref(100)
+const mapEl=ref(),mode=ref('online'),url=ref(''),name=ref(''),directoryPath=ref(''),minZoom=ref(0),maxZoom=ref(20),opacity=ref(100)
 const files=ref([]),input=ref(),uploading=ref(false),layers=ref([]),activeId=ref('')
+const jobs=ref([]),jobKind=ref('pack'),jobSource=ref(''),jobOutput=ref(''),jobInPlace=ref(false),jobTarget=ref('tms'),jobName=ref(''),jobBusy=ref(false)
+let jobTimer
 const onlineLayerName=ref(''),baseVisible=ref(true),previewVisible=ref(true)
 const onlinePresets=tileSources.map(source=>({...source,min:source.minZoom,max:source.maxZoom}))
 const presetId=ref('osm_standard')
 let map,baseLayer,previewLayer
 const activeLayer=computed(()=>activeId.value==='online'?{kind:'online',name:onlineLayerName.value||'在线 XYZ 图层'}:layers.value.find(layer=>layer.id===activeId.value)?{kind:'upload',name:layers.value.find(layer=>layer.id===activeId.value).name}:{kind:'base',name:'Google 卫星影像'})
+const jobPlaceHint=computed(()=>{
+  if(jobKind.value==='unpack')return '拆包必须写到目录，不能拆在 mbtiles 文件上。留空则写到工具目录下的任务文件夹，完成后可以下载压缩包。'
+  if(jobKind.value==='pack')return jobInPlace.value?'MBTiles 写进源目录，和 z/x/y 放在一起。名称留空就用目录名。不生成压缩包，删除任务只去掉这个包。':'留空则写到工具目录，文件名为任务编号.mbtiles。删除任务会删掉这个文件，源目录不动。'
+  return jobInPlace.value?'直接改源目录。只有目标是 TMS 才会翻转 Y，删除任务不会还原。XYZ 与 WMTS 只写上或去掉能力文件，不移动瓦片。':'复制到单独目录，源目录不动。留空则写到工具目录下的任务文件夹，完成后可以下载压缩包。'
+})
 
 const notify=(message,type='success')=>emit('notify',message,type)
 function initMap(){
@@ -55,6 +62,59 @@ async function uploadDirectory(){
   catch(error){notify(error.response?.data?.detail||error.message,'error')}finally{uploading.value=false}
 }
 async function loadLayers(){try{layers.value=(await axios.get('/api/tile-preview/layers')).data}catch(error){console.error(error)}}
+function layerCaption(layer){
+  const where=layer.kind==='mbtiles'?'MBTiles':layer.external?'外接目录':'本地上传'
+  const scheme=layer.scheme?` · ${String(layer.scheme).toUpperCase()}`:''
+  return `${where}${scheme} · Z${layer.min_zoom}–Z${layer.max_zoom} · ${layer.tile_count} 个`
+}
+function jobLabel(job){
+  const kind=job.request?.kind
+  const where=job.request?.in_place?' · 原目录':''
+  if(kind==='pack')return `打包 MBTiles${where}`
+  if(kind==='unpack')return '拆包'
+  if(kind==='scheme')return `转为 ${(job.request?.target||'').toUpperCase()}${where}`
+  return '瓦片任务'
+}
+async function loadJobs(){
+  try{
+    jobs.value=(await axios.get('/api/tile-preview/jobs')).data
+    const current=layers.value.find(layer=>layer.id===activeId.value)
+    if(!current||current.kind==='mbtiles')return
+    const fresh=(await axios.get('/api/tile-preview/layers')).data
+    const updated=fresh.find(layer=>layer.id===current.id)
+    if(!updated)return
+    layers.value=fresh
+    if(current.scheme!==updated.scheme)showLocal(updated)
+  }catch(error){console.error(error)}
+}
+async function submitJob(){
+  if(!jobSource.value.trim())return notify('请填写服务器上的源路径。','error')
+  jobBusy.value=true
+  try{
+    await axios.post('/api/tile-preview/jobs',{kind:jobKind.value,source:jobSource.value.trim(),in_place:jobKind.value==='unpack'?false:jobInPlace.value,output_path:jobKind.value==='unpack'||!jobInPlace.value?jobOutput.value.trim():'',name:jobName.value,target:jobTarget.value})
+    notify('任务已加入队列。')
+    await loadJobs()
+  }catch(error){notify(error.response?.data?.detail||error.message,'error')}
+  finally{jobBusy.value=false}
+}
+async function controlJob(job,action){
+  if(action==='delete'){
+    const message=job.request?.in_place&&job.request?.kind==='scheme'?'从列表删除这个任务？已经改过的瓦片目录不会还原。':'删除这个任务及其输出？源目录不会被删除。'
+    if(props.confirmAction&&!await props.confirmAction(message))return
+  }
+  try{
+    if(action==='delete')await axios.delete(`/api/tile-preview/jobs/${job.id}`)
+    else await axios.post(`/api/tile-preview/jobs/${job.id}/${action}`)
+    await loadJobs()
+  }catch(error){notify(error.response?.data?.detail||error.message,'error')}
+}
+async function openDirectory(){
+  const path=directoryPath.value.trim()
+  if(!path)return notify('请填写服务器上已挂载目录的绝对路径。','error')
+  uploading.value=true
+  try{const layer=(await axios.post('/api/tile-preview/layers/open',{path,name:name.value})).data;name.value='';await loadLayers();showLocal(layer);notify(`已读取 ${layer.tile_count} 个瓦片，层级 Z${layer.min_zoom}–Z${layer.max_zoom}。`)}
+  catch(error){notify(error.response?.data?.detail||error.message,'error')}finally{uploading.value=false}
+}
 function showLocal(layer){
   if(previewLayer)map.removeLayer(previewLayer)
   previewLayer=L.tileLayer(`/api/tile-preview/layers/${layer.id}/{z}/{x}/{y}`,{minZoom:layer.min_zoom,maxNativeZoom:layer.max_zoom,maxZoom:24,opacity:Number(opacity.value)/100,errorTileUrl:''}).addTo(map)
@@ -67,15 +127,16 @@ function toggleBase(){baseVisible.value=!baseVisible.value;if(baseVisible.value)
 function togglePreview(){if(!previewLayer)return;previewVisible.value=!previewVisible.value;if(previewVisible.value)previewLayer.addTo(map);else map.removeLayer(previewLayer)}
 function clearPreview(){if(previewLayer)map.removeLayer(previewLayer);previewLayer=null;activeId.value=''}
 async function removeLayer(layer){
-  if(props.confirmAction&&!await props.confirmAction(`删除“${layer.name}”及上传的全部瓦片文件？`))return
+  const message=layer.kind==='mbtiles'?`从列表移除“${layer.name}”？源 MBTiles 文件不会被删除。`:layer.external?`从列表移除“${layer.name}”？硬盘上的目录不会被删除。`:`删除“${layer.name}”及上传的全部瓦片文件？`
+  if(props.confirmAction&&!await props.confirmAction(message))return
   try{await axios.delete(`/api/tile-preview/layers/${layer.id}`);if(activeId.value===layer.id)clearPreview();await loadLayers();notify('本地瓦片图层已删除。')}
   catch(error){notify(error.response?.data?.detail||error.message,'error')}
 }
 // Leaflet caches its container size; without this the map keeps its old pixel size after a
 // window resize (grey strips) until you navigate away and back.
 let mapObserver=null
-onMounted(async()=>{applyPreset();await nextTick();initMap();await loadLayers();if(mapEl.value&&typeof ResizeObserver!=='undefined'){mapObserver=new ResizeObserver(()=>map?.invalidateSize({pan:false}));mapObserver.observe(mapEl.value)}})
-onBeforeUnmount(()=>{mapObserver?.disconnect();map?.remove()})
+onMounted(async()=>{applyPreset();await nextTick();initMap();await loadLayers();await loadJobs();jobTimer=setInterval(loadJobs,2000);if(mapEl.value&&typeof ResizeObserver!=='undefined'){mapObserver=new ResizeObserver(()=>map?.invalidateSize({pan:false}));mapObserver.observe(mapEl.value)}})
+onBeforeUnmount(()=>{clearInterval(jobTimer);mapObserver?.disconnect();map?.remove()})
 </script>
 
 <template>
@@ -84,25 +145,57 @@ onBeforeUnmount(()=>{mapObserver?.disconnect();map?.remove()})
     <div class="tile-viewer-workspace">
       <aside class="panel tile-viewer-config">
         <div class="panel-title"><div><b>加载瓦片</b><small>支持标准 Web Mercator XYZ 瓦片</small></div></div>
-        <div class="segmented"><button :class="{active:mode==='online'}" @click="mode='online'">在线链接</button><button :class="{active:mode==='local'}" @click="mode='local'">上传目录</button></div>
+        <div class="segmented"><button :class="{active:mode==='online'}" @click="mode='online'">在线链接</button><button :class="{active:mode==='local'}" @click="mode='local'">上传目录</button><button :class="{active:mode==='path'}" @click="mode='path'">服务器目录</button></div>
         <template v-if="mode==='online'">
           <label>内置在线链接<select v-model="presetId" @change="applyPreset()"><option v-for="preset in onlinePresets" :key="preset.id" :value="preset.id">{{preset.name}} · Z{{preset.min}}–Z{{preset.max}}</option><option value="custom">自定义链接</option></select><small>选择后自动填入地址及有效层级，仍可继续修改</small></label>
           <label class="tile-url">瓦片地址<textarea v-model="url" rows="3" placeholder="https://example.com/tiles/{z}/{x}/{y}.png"></textarea><small>支持 {z}/{x}/{y}；Bing 内置链接使用 {q} QuadKey</small></label>
           <div class="tile-zoom-grid"><label>最小层级<input v-model.number="minZoom" type="number" min="0" max="24"></label><label>最大层级<input v-model.number="maxZoom" type="number" min="0" max="24"></label></div>
           <button class="primary-action" @click="showOnline">加载在线瓦片</button>
         </template>
-        <template v-else>
+        <template v-else-if="mode==='local'">
           <label>图层名称（可选）<input v-model="name" placeholder="默认使用目录名称"></label>
           <label class="directory-picker"><input ref="input" type="file" webkitdirectory directory multiple @change="chooseDirectory"><span>{{files.length?`已选择 ${files.length} 个图片瓦片`:'选择 z/x/y 瓦片目录'}}</span><small>PNG · JPG · JPEG · WEBP，最大 2GB</small></label>
           <button class="primary-action" :disabled="uploading||!files.length" @click="uploadDirectory">{{uploading?'正在上传并识别…':'上传并预览'}}</button>
         </template>
+        <template v-else-if="mode==='path'">
+          <label>图层名称（可选）<input v-model="name" placeholder="默认使用目录名称"></label>
+          <label>服务器目录<input v-model="directoryPath" placeholder="/mnt/external/tiles" spellcheck="false"></label>
+          <small>直接读取本机已挂载的目录，或以 .mbtiles 结尾的文件做预览。预览不会在源文件旁边写出瓦片。删除图层只从列表移除。</small>
+          <button class="primary-action" :disabled="uploading||!directoryPath.trim()" @click="openDirectory">{{uploading?'正在读取…':'读取并预览'}}</button>
+        </template>
+        <div class="tile-job-block">
+          <div class="panel-title"><div><b>打包、拆包与方案</b><small>直接读写服务器上的目录</small></div></div>
+          <label>任务<select v-model="jobKind"><option value="pack">打包为 MBTiles</option><option value="unpack">拆到目录</option><option value="scheme">转换 XYZ / TMS / WMTS</option></select></label>
+          <label>源路径<input v-model="jobSource" placeholder="/mnt/external/tiles" spellcheck="false"></label>
+          <label v-if="jobKind==='pack'">名称（可选）<input v-model="jobName" placeholder="默认使用目录名"></label>
+          <label v-if="jobKind==='scheme'">目标方案<select v-model="jobTarget"><option value="xyz">XYZ</option><option value="tms">TMS</option><option value="wmts">WMTS</option></select></label>
+          <p v-if="jobKind==='scheme'" class="job-hint">WMTS（GoogleMapsCompatible）与 XYZ 的行列号相同，只写入能力文件，不会翻转 Y。只有 TMS 会把 Y 从左上角换成左下角。</p>
+          <div class="job-place">
+            <label v-if="jobKind!=='unpack'" class="check-label"><input v-model="jobInPlace" type="checkbox"><span>{{jobKind==='pack'?'在源目录里打包，不另建输出':'在原目录转换，不打包下载'}}</span></label>
+            <small>{{jobPlaceHint}}</small>
+            <label v-if="jobKind==='unpack'||!jobInPlace">输出路径<input v-model="jobOutput" placeholder="留空则写到工具目录" spellcheck="false"></label>
+          </div>
+          <button class="primary-action" :disabled="jobBusy||!jobSource.trim()" @click="submitJob">{{jobBusy?'正在提交…':'加入队列'}}</button>
+          <div v-if="jobs.length" class="local-layer-list">
+            <article v-for="job in jobs" :key="job.id">
+              <div class="layer-main"><b>{{jobLabel(job)}}</b><small>{{job.message}} · {{job.progress}}%</small></div>
+              <div class="tile-job-actions">
+                <button v-if="job.status==='queued'||job.status==='running'" type="button" @click="controlJob(job,'pause')">暂停</button>
+                <button v-if="job.status==='paused'" type="button" @click="controlJob(job,'resume')">继续</button>
+                <button v-if="job.status==='failed'||job.status==='cancelled'" type="button" @click="controlJob(job,'retry')">重试</button>
+                <a v-if="job.result?.archive" :href="`/api/tile-preview/jobs/${job.id}/export`">下载</a>
+                <button type="button" @click="controlJob(job,'delete')">删除</button>
+              </div>
+            </article>
+          </div>
+        </div>
         <label class="opacity-control">图层透明度 <b>{{opacity}}%</b><input v-model.number="opacity" type="range" min="0" max="100" @input="updateOpacity"></label>
         <div class="layer-catalog">
           <div class="layer-group-title"><span>系统底图</span><small>系统自带</small></div>
           <article class="base-layer-row"><span class="source-icon base">底</span><div><b>Google 卫星影像</b><small>不是上传内容</small></div><button class="visibility-toggle" :class="{off:!baseVisible}" @click="toggleBase">{{baseVisible?'显示中':'已隐藏'}}</button></article>
           <div class="layer-group-title custom"><span>我的自定义图层</span><small>{{layers.length+(activeId==='online'?1:0)}} 个</small></div>
           <article v-if="activeId==='online'" class="custom-layer online-row active"><span class="source-icon online">链</span><div><b>{{onlineLayerName}}</b><small>在线 URL · Z{{minZoom}}–Z{{maxZoom}}</small></div><button class="visibility-toggle" :class="{off:!previewVisible}" @click="togglePreview">{{previewVisible?'显示中':'已隐藏'}}</button></article>
-          <article v-for="layer in layers" :key="layer.id" class="custom-layer upload-row" :class="{active:activeId===layer.id}"><span class="source-icon upload">传</span><button class="layer-main" @click="showLocal(layer)"><b>{{layer.name}}</b><small>本地上传 · Z{{layer.min_zoom}}–Z{{layer.max_zoom}} · {{layer.tile_count}} 个</small></button><button v-if="activeId===layer.id" class="visibility-toggle" :class="{off:!previewVisible}" @click="togglePreview">{{previewVisible?'显示中':'已隐藏'}}</button><button class="layer-delete" title="删除上传图层" @click="removeLayer(layer)">×</button></article>
+          <article v-for="layer in layers" :key="layer.id" class="custom-layer upload-row" :class="{active:activeId===layer.id}"><span class="source-icon upload">{{layer.kind==='mbtiles'?'包':'传'}}</span><button class="layer-main" @click="showLocal(layer)"><b>{{layer.name}}</b><small>{{layerCaption(layer)}}</small></button><button v-if="activeId===layer.id" class="visibility-toggle" :class="{off:!previewVisible}" @click="togglePreview">{{previewVisible?'显示中':'已隐藏'}}</button><button class="layer-delete" title="删除上传图层" @click="removeLayer(layer)">×</button></article>
           <div v-if="!layers.length&&activeId!=='online'" class="empty-custom-layers">尚未加载在线链接或上传目录</div>
         </div>
       </aside>
@@ -112,7 +205,7 @@ onBeforeUnmount(()=>{mapObserver?.disconnect();map?.remove()})
 </template>
 
 <style scoped>
-.tile-viewer-page{max-width:1460px;margin:0 auto;padding:74px 28px 34px}.tile-viewer-page>header{padding:0 2px 22px;border-bottom:1px solid #d9e3f2}.tile-viewer-page h1{margin:7px 0 5px;color:#203858;font-size:var(--fs-28,28px)}.tile-viewer-page p{margin:0;color:#70829b;font-size:var(--fs-13,13px)}.eyebrow{color:#5275c7;font-size:var(--fs-10,10px);font-weight:800;letter-spacing:1.7px}.tile-viewer-workspace{display:grid;grid-template-columns:350px minmax(0,1fr);gap:18px;margin-top:20px}.panel{border:1px solid #d8e2ef;border-radius:16px;background:#fff;box-shadow:0 8px 25px #31527c0d}.tile-viewer-config{display:flex;flex-direction:column;gap:15px;padding:18px}.panel-title{display:flex;justify-content:space-between}.panel-title div{display:flex;flex-direction:column;gap:3px}.panel-title b{color:#263d5b;font-size:var(--fs-14,14px)}.panel-title small,label small,.map-toolbar small{color:#8392a6;font-size:var(--fs-10,10px)}.segmented{display:grid;grid-template-columns:1fr 1fr;padding:3px;border-radius:10px;background:#edf2f9}.segmented button{padding:8px;border:0;border-radius:8px;color:#657994;background:transparent;cursor:pointer}.segmented button.active{color:#315eb9;background:#fff;box-shadow:0 2px 8px #35587d18}label{display:flex;flex-direction:column;gap:7px;color:#405773;font-size:var(--fs-11,11px);font-weight:650}input,textarea,select{box-sizing:border-box;width:100%;padding:10px 11px;border:1px solid #cedaea;border-radius:9px;outline:0;color:#304965;background:#fbfcff;font:11px/1.5 inherit}select{appearance:none;padding-right:34px;background:#fbfcff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23687992' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center}textarea{resize:vertical}.tile-zoom-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.primary-action{padding:11px;border:0;border-radius:10px;color:#fff;background:linear-gradient(135deg,#4775d5,#6959d6);font-size:var(--fs-11,11px);font-weight:750;cursor:pointer}.primary-action:disabled{opacity:.45;cursor:not-allowed}.directory-picker{align-items:center;padding:23px 12px;border:1px dashed #aebfda;border-radius:12px;background:#f7faff;text-align:center;cursor:pointer}.directory-picker input{display:none}.directory-picker span{color:#3d5f96;font-size:var(--fs-12,12px)}.opacity-control{display:grid;grid-template-columns:1fr auto;align-items:center;padding-top:4px}.opacity-control input{grid-column:1/-1;padding:0;border:0}.local-layer-list{display:grid;gap:7px;padding-top:4px;border-top:1px solid #e5ebf3}.list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}.list-heading b{font-size:var(--fs-11,11px)}.list-heading small{font-size:var(--fs-9,9px);color:#8795a8}.local-layer-list article{display:flex;align-items:center;border:1px solid #e0e7f0;border-radius:10px;overflow:hidden}.local-layer-list article.active{border-color:#7999da;background:#f5f8ff}.layer-main{display:flex;min-width:0;flex:1;flex-direction:column;align-items:start;gap:3px;padding:9px 10px;border:0;background:transparent;text-align:left;cursor:pointer}.layer-main b{max-width:100%;overflow:hidden;color:#405774;font-size:var(--fs-10,10px);text-overflow:ellipsis;white-space:nowrap}.layer-main small{color:#8a99ac;font-size:var(--fs-9,9px)}.layer-delete{width:34px;height:34px;border:0;color:#a05b66;background:transparent;font-size:var(--fs-18,18px);cursor:pointer}.tile-viewer-map-panel{min-width:0;overflow:hidden}.map-toolbar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #e0e7f0}.map-toolbar>div{display:flex;flex-direction:column;gap:3px}.map-toolbar b{color:#304963;font-size:var(--fs-13,13px)}.map-toolbar button{padding:7px 10px;border:1px solid #cbd8e9;border-radius:8px;color:#5a6f89;background:#fff;font-size:var(--fs-10,10px);cursor:pointer}.tile-viewer-map{height:650px;background:#e8eef5}@media(max-width:900px){.tile-viewer-page{padding:66px 14px 24px}.tile-viewer-workspace{grid-template-columns:1fr}.tile-viewer-map{height:520px}}
+.tile-viewer-page{max-width:1460px;margin:0 auto;padding:74px 28px 34px}.tile-viewer-page>header{padding:0 2px 22px;border-bottom:1px solid #d9e3f2}.tile-viewer-page h1{margin:7px 0 5px;color:#203858;font-size:var(--fs-28,28px)}.tile-viewer-page p{margin:0;color:#70829b;font-size:var(--fs-13,13px)}.eyebrow{color:#5275c7;font-size:var(--fs-10,10px);font-weight:800;letter-spacing:1.7px}.tile-viewer-workspace{display:grid;grid-template-columns:350px minmax(0,1fr);align-items:start;gap:18px;margin-top:20px}.panel{border:1px solid #d8e2ef;border-radius:16px;background:#fff;box-shadow:0 8px 25px #31527c0d}.tile-viewer-config{display:flex;flex-direction:column;gap:15px;padding:18px}.panel-title{display:flex;justify-content:space-between}.panel-title div{display:flex;flex-direction:column;gap:3px}.panel-title b{color:#263d5b;font-size:var(--fs-14,14px)}.panel-title small,label small,.map-toolbar small{color:#8392a6;font-size:var(--fs-10,10px)}.segmented{display:grid;grid-template-columns:1fr 1fr 1fr;padding:3px;border-radius:10px;background:#edf2f9}.segmented button{padding:8px;border:0;border-radius:8px;color:#657994;background:transparent;cursor:pointer}.segmented button.active{color:#315eb9;background:#fff;box-shadow:0 2px 8px #35587d18}label{display:flex;flex-direction:column;gap:7px;color:#405773;font-size:var(--fs-11,11px);font-weight:650}input,textarea,select{box-sizing:border-box;width:100%;padding:10px 11px;border:1px solid #cedaea;border-radius:9px;outline:0;color:#304965;background:#fbfcff;font:11px/1.5 inherit}select{appearance:none;padding-right:34px;background:#fbfcff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23687992' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 11px center}textarea{resize:vertical}.tile-zoom-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.primary-action{padding:11px;border:0;border-radius:10px;color:#fff;background:linear-gradient(135deg,#4775d5,#6959d6);font-size:var(--fs-11,11px);font-weight:750;cursor:pointer}.primary-action:disabled{opacity:.45;cursor:not-allowed}.tile-job-block{display:flex;flex-direction:column;gap:10px;padding-top:8px;border-top:1px solid #e5ebf3}.tile-job-block label{margin-top:0}.job-hint{margin:0;color:#70829b;font-size:var(--fs-10,10px);line-height:1.5}.job-place{display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid #d5deea;border-radius:10px;background:#f7f9fc}.job-place .check-label{flex-direction:row;align-items:flex-start;gap:8px;margin:0}.job-place .check-label input{width:16px;height:16px;flex:none;margin:2px 0 0;padding:0}.job-place .check-label span{font-weight:650;line-height:1.45}.job-place small{display:block;margin:0;color:#70829b;font-size:var(--fs-11,11px);line-height:1.5;font-weight:400}.job-place label:not(.check-label){margin:0}.tile-job-actions{display:flex;flex:none;flex-wrap:wrap;gap:4px;padding-right:6px}.tile-job-actions button,.tile-job-actions a{padding:4px 6px;border:1px solid #d5deea;border-radius:6px;color:#4d6480;background:#fff;font-size:var(--fs-9,9px);text-decoration:none;cursor:pointer}.directory-picker{align-items:center;padding:23px 12px;border:1px dashed #aebfda;border-radius:12px;background:#f7faff;text-align:center;cursor:pointer}.directory-picker input{display:none}.directory-picker span{color:#3d5f96;font-size:var(--fs-12,12px)}.opacity-control{display:grid;grid-template-columns:1fr auto;align-items:center;padding-top:4px}.opacity-control input{grid-column:1/-1;padding:0;border:0}.local-layer-list{display:grid;gap:7px;padding-top:4px;border-top:1px solid #e5ebf3}.list-heading{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}.list-heading b{font-size:var(--fs-11,11px)}.list-heading small{font-size:var(--fs-9,9px);color:#8795a8}.local-layer-list article{display:flex;align-items:center;border:1px solid #e0e7f0;border-radius:10px;overflow:hidden}.local-layer-list article.active{border-color:#7999da;background:#f5f8ff}.layer-main{display:flex;min-width:0;flex:1;flex-direction:column;align-items:start;gap:3px;padding:9px 10px;border:0;background:transparent;text-align:left;cursor:pointer}.layer-main b{max-width:100%;overflow:hidden;color:#405774;font-size:var(--fs-10,10px);text-overflow:ellipsis;white-space:nowrap}.layer-main small{color:#8a99ac;font-size:var(--fs-9,9px)}.layer-delete{width:34px;height:34px;border:0;color:#a05b66;background:transparent;font-size:var(--fs-18,18px);cursor:pointer}.tile-viewer-map-panel{display:flex;min-width:0;flex-direction:column;padding:0;overflow:hidden}.map-toolbar{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid #e0e7f0}.map-toolbar>div{display:flex;flex-direction:column;gap:3px}.map-toolbar b{color:#304963;font-size:var(--fs-13,13px)}.map-toolbar button{padding:7px 10px;border:1px solid #cbd8e9;border-radius:8px;color:#5a6f89;background:#fff;font-size:var(--fs-10,10px);cursor:pointer}.tile-viewer-map{height:650px;background:#e8eef5}@media(max-width:900px){.tile-viewer-page{padding:66px 14px 24px}.tile-viewer-workspace{grid-template-columns:1fr}.tile-viewer-map{height:520px}}
 .layer-catalog{display:grid;gap:7px;padding-top:4px;border-top:1px solid #e5ebf3}.layer-catalog article{display:flex;align-items:center;gap:8px;min-width:0;padding-left:8px;border:1px solid #e0e7f0;border-radius:10px;overflow:hidden;background:#fff}.layer-catalog article.active{border-color:#7999da;background:#f5f8ff}.layer-catalog article>div{display:flex;min-width:0;flex:1;flex-direction:column;gap:3px;padding:9px 8px 9px 0}.layer-catalog article>div b{overflow:hidden;color:#405774;font-size:var(--fs-10,10px);text-overflow:ellipsis;white-space:nowrap}.layer-catalog article>div small{color:#8a99ac;font-size:var(--fs-9,9px)}.source-badge{display:inline-flex;flex:none;align-items:center;width:max-content;padding:3px 6px;border-radius:5px;font-size:var(--fs-8,8px);font-weight:800;line-height:1.2}.source-badge.base{color:#53677f;background:#e8edf3}.source-badge.online{color:#3566bd;background:#e6efff}.source-badge.upload{color:#6a50ad;background:#eee9fb}.layer-catalog .layer-main{padding-left:0}.map-toolbar small{display:flex;align-items:center;gap:7px}.map-stage{position:relative}.map-layer-key{position:absolute;right:12px;bottom:12px;z-index:500;display:flex;gap:10px;padding:7px 9px;border:1px solid #dbe4ef;border-radius:9px;color:#61758f;background:#fffffff0;box-shadow:0 4px 14px #344d6c1a;font-size:var(--fs-9,9px)}.map-layer-key span{display:flex;align-items:center;gap:4px}.map-layer-key i{width:7px;height:7px;border-radius:50%}.map-layer-key i.base{background:#8998aa}.map-layer-key i.online{background:#4d7bd5}.map-layer-key i.upload{background:#8064c5}
 .layer-group-title{display:flex;align-items:center;justify-content:space-between;margin-top:2px;padding:5px 2px 2px;color:#5f7188;font-size:var(--fs-9,9px);font-weight:800;letter-spacing:.5px}.layer-group-title.custom{margin-top:7px;padding-top:10px;border-top:1px dashed #dce5f0;color:#526fbd}.layer-group-title small{color:#96a2b1;font-size:var(--fs-8,8px);font-weight:600;letter-spacing:0}.source-icon{display:grid;place-items:center;flex:none;width:25px;height:25px;border-radius:7px;font-size:var(--fs-9,9px);font-weight:900}.source-icon.base{color:#5e6f83;background:#e9edf2}.source-icon.online{color:#2861bf;background:#e3eeff}.source-icon.upload{color:#6746b3;background:#eee7ff}.layer-catalog article.custom-layer{border-left-width:3px}.layer-catalog article.online-row{border-left-color:#4d7bd5}.layer-catalog article.upload-row{border-left-color:#8064c5}.visibility-toggle{flex:none;margin-right:7px;padding:5px 7px;border:1px solid #b8cae5;border-radius:7px;color:#3562ad;background:#f5f8ff;font-size:var(--fs-8,8px);font-weight:700;cursor:pointer}.visibility-toggle.off{border-color:#d6dde7;color:#8996a7;background:#f4f6f8}.empty-custom-layers{padding:10px;border:1px dashed #d8e1ec;border-radius:9px;color:#95a1b1;text-align:center;font-size:var(--fs-9,9px)}
 

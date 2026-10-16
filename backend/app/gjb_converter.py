@@ -85,7 +85,20 @@ def _preview_name(kind, record):
     return "" if value.upper() in {"NULL", "NONE", "N/A", "NAN", "-"} else value
 
 
-def convert(input_dir: Path, output_dir: Path, crs_arg: str | None, progress):
+def _ready_shapefile(base: Path):
+    paths = [Path(str(base) + suffix) for suffix in (".shp", ".shx", ".dbf")]
+    if not all(path.is_file() and path.stat().st_size > 0 for path in paths):
+        return None
+    try:
+        reader = gjb.shapefile.Reader(str(base))
+        count = reader.numRecords
+        reader.close()
+    except Exception:
+        return None
+    return count if count > 0 else None
+
+
+def convert(input_dir: Path, output_dir: Path, crs_arg: str | None, progress, preview_path: Path | None = None):
     stem, groups, sms_path = discover(input_dir)
     sms_meta = gjb.parse_sms(sms_path) if sms_path else {}
     crs = gjb.resolve_crs(sms_meta, crs_arg or None)
@@ -108,10 +121,16 @@ def convert(input_dir: Path, output_dir: Path, crs_arg: str | None, progress):
                  for letter, name, attrs, geoms in parsed if geoms.get(kind)]
         if not items:
             continue
-        written = gjb.write_merged_shapefile(kind, items, str(output_dir / f"{stem}_all_{kind}"),
-                                             crs, ox, oy, scale)
+        target = output_dir / f"{stem}_all_{kind}"
+        existing = _ready_shapefile(target)
+        if existing is None:
+            written = gjb.write_merged_shapefile(kind, items, str(target), crs, ox, oy, scale)
+            message = f"已合并 {kind} 类要素：{{count}}/{{total}}"
+        else:
+            written = existing
+            message = f"已跳过已转换的 {kind} 类要素：{{count}}/{{total}}"
         merged_types.append(kind); written_total += written
-        progress(written_total, max(1, total), f"已合并 {kind} 类要素：{written_total}/{total}")
+        progress(written_total, max(1, total), message.format(count=written_total, total=total))
     if not merged_types or written_total == 0:
         raise ValueError("GJB 文件组中没有可转换的有效几何数据")
 
@@ -142,7 +161,9 @@ def convert(input_dir: Path, output_dir: Path, crs_arg: str | None, progress):
                     "geometry": _preview_geometry(kind, geom, ox, oy, scale, transformer)})
         progress(written_total, max(1, total), f"正在生成预览：{letter} 图层组")
 
-    (output_dir.parent / "preview.geojson").write_text(
+    preview_file = preview_path or (output_dir.parent / "preview.geojson")
+    preview_file.parent.mkdir(parents=True, exist_ok=True)
+    preview_file.write_text(
         json.dumps({"type": "FeatureCollection", "features": preview}, ensure_ascii=False), "utf-8")
     metadata = {"stem": stem, "crs": source_crs.to_string(), "crs_wkt": source_crs.to_wkt(),
                 "offset": [ox, oy], "scale": scale,

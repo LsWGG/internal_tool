@@ -9,12 +9,14 @@ import ToolPortal from './ToolPortal.vue'
 import AiAssistant from './AiAssistant.vue'
 import ThemeToggle from './ThemeToggle.vue'
 import TilePreviewTool from './TilePreviewTool.vue'
+import RasterClipTool from './RasterClipTool.vue'
+import VectorConvertTool from './VectorConvertTool.vue'
 import DbxPage from './DbxPage.vue'
 import DockerComposeManager from './DockerComposeManager.vue'
 import MermaidExportTool from './MermaidExportTool.vue'
 import CleanTool from './CleanTool.vue'
 const PdfToolbox=defineAsyncComponent(()=>import('./PdfToolbox.vue'))
-const jsonAiPatch=ref(null)
+const jsonAiPatch=ref(null),rasterAiPatch=ref(null),vectorAiPatch=ref(null)
 const JsonTool=defineAsyncComponent(()=>import('./JsonTool.vue'))
 const OntologyViewer=defineAsyncComponent(()=>import('./OntologyViewer.vue'))
 import ExternalToolPage from './ExternalToolPage.vue'
@@ -29,7 +31,7 @@ const iconNames=Object.keys(iconPaths)
 
 const mapEl=ref(), map=ref(), layers=ref([]), tasks=ref([]), submitting=ref(false)
 const regionQuery=ref(''), regionResults=ref([]), searching=ref(false)
-const form=reactive({data_type:'satellite',tile_source:'google_satellite',zoom_min:1,zoom_max:17,max_workers:8,split_size:2048,output_format:'png'})
+const form=reactive({data_type:'satellite',tile_source:'google_satellite',zoom_min:1,zoom_max:17,max_workers:8,split_size:2048,output_format:'png',png_width:0,png_height:0,download_path:'',pack_mbtiles:false})
 const mapCategory=ref('imagery')
 const availableTileSources=computed(()=>tileSources.filter(source=>source.category===mapCategory.value))
 const selectedTileSource=computed(()=>tileSources.find(source=>source.id===form.tile_source)||availableTileSources.value[0])
@@ -39,7 +41,7 @@ const dockerForm=reactive({arch:'x86_64',docker_version:'',compose_version:''})
 const dockerTasks=ref([]), versions=reactive({docker:[],compose:[]}), dockerSubmitting=ref(false), versionsLoading=ref(false)
 const gjbTasks=ref([]), gjbFiles=ref([]), gjbSubmitting=ref(false), gjbMapEl=ref(), gjbInput=ref(), previewTask=ref(null)
 const autoPreviewTaskId=ref(null), previewLoading=ref(false)
-const gjbForm=reactive({crs:'auto'})
+const gjbForm=reactive({crs:'auto',source_path:'',output_path:'',in_place:false})
 const esConnection=reactive({host:'http://127.0.0.1:9200',username:'',password:'',verify_certs:true})
 const showEsPassword=ref(false)
 const esInfo=ref(null),esIndexes=ref([]),selectedIndexes=ref([]),esTasks=ref([]),esMode=ref('export')
@@ -48,11 +50,11 @@ const esOptions=reactive({overwrite:false})
 const nebulaConnection=reactive({host:'127.0.0.1',port:9669,username:'root',password:'nebula'})
 const showNebulaPassword=ref(false)
 const nebulaSpaces=ref([]),selectedSpaces=ref([]),nebulaTasks=ref([]),nebulaMode=ref('export'),nebulaConnecting=ref(false),nebulaSubmitting=ref(false),nebulaFiles=ref([]),nebulaZipInput=ref(),nebulaDirInput=ref()
-const shpLayers=ref([]),shpFiles=ref([]),shpUploading=ref(false),shpInput=ref(),shpMapEl=ref()
+const shpLayers=ref([]),shpFiles=ref([]),shpDirectory=ref(''),shpUploading=ref(false),shpInput=ref(),shpMapEl=ref()
 const trendingDates=ref([]),trendingReport=ref(null),trendingLoading=ref(false),trendingRefreshing=ref(false)
 const trendingLanguage=ref('zh'),trendingView=ref('report'),trendingFavorites=ref([])
 const trendingFavoriteNames=computed(()=>new Set(trendingFavorites.value.map(item=>item.full_name)))
-const propzoneTasks=ref([]), propzoneQuery=ref(''), propzoneUrl=ref(''), propzoneLevel=ref('all'), propzoneResults=ref([]), propzoneSelected=ref([]), propzoneSearching=ref(false), propzoneSubmitting=ref(false), propzoneMapEl=ref(), propzoneChildrenLoading=ref({})
+const propzoneTasks=ref([]), propzoneQuery=ref(''), propzoneUrl=ref(''), propzoneLevel=ref('all'), propzoneResults=ref([]), propzoneSelected=ref([]), propzoneSearching=ref(false), propzoneSubmitting=ref(false), propzoneDownloadPath=ref(''), propzoneMapEl=ref(), propzoneChildrenLoading=ref({})
 const crawlerTasks=ref([]), crawlerSource=ref('generic'), crawlerTwitterMode=ref('keyword'), crawlerTiktokMode=ref('keyword'), crawlerYoutubeMode=ref('keyword'), crawlerYtdlpMode=ref('videos'), crawlerTelegramMode=ref('channel'), crawlerUrls=ref(''),crawlerKeyword=ref(''), crawlerAccountName=ref(''), crawlerFields=ref([]), crawlerProxies=ref(''), crawlerDouyinCookie=ref(''), crawlerOutputFormat=ref('xlsx'), crawlerInterval=ref(0), crawlerDelay=ref(1), crawlerDynamic=ref(false), crawlerAnalyzing=ref(false), crawlerSubmitting=ref(false), crawlerMaxItems=ref(50), crawlerYoutubeQuality=ref(720), crawlerArticleSelector=ref(''), crawlerNextPageSelector=ref(''), crawlerPreviewTable=ref(false)
 const crawlerTelegram=reactive({api_id:'',api_hash:'',session:''}), showCrawlerTelegramSecrets=ref(false)
 const crawlerDownloadVideos=ref(true)
@@ -133,7 +135,7 @@ const databasePageCount=computed(()=>Math.max(1,Math.ceil(databaseTotal.value/da
 const pdfDetailFiles=computed(()=>{const files=pdfDetailTask.value?.result?.files||[];const query=pdfFileQuery.value.trim().toLowerCase();return query?files.filter(file=>file.name.toLowerCase().includes(query)||(file.url||'').toLowerCase().includes(query)):files})
 const aiContext=computed(()=>{
   const latestError=list=>list.find(item=>item.status==='failed')?.error||''
-  if(view.value==='map')return {data_type:form.data_type,tile_source:form.tile_source,zoom_min:form.zoom_min,zoom_max:form.zoom_max,output_format:form.output_format,selected_ranges:layers.value.length,latest_error:latestError(tasks.value)}
+  if(view.value==='map')return {data_type:form.data_type,tile_source:form.tile_source,zoom_min:form.zoom_min,zoom_max:form.zoom_max,output_format:form.output_format,png_width:form.png_width,png_height:form.png_height,download_path:form.download_path,pack_mbtiles:form.pack_mbtiles,selected_ranges:layers.value.length,latest_error:latestError(tasks.value)}
   if(view.value==='crawler')return {source:crawlerSource.value,twitter_mode:crawlerTwitterMode.value,tiktok_mode:crawlerTiktokMode.value,youtube_mode:crawlerYoutubeMode.value,ytdlp_mode:crawlerYtdlpMode.value,telegram_mode:crawlerTelegramMode.value,max_items:crawlerMaxItems.value,output_format:crawlerOutputFormat.value,download_videos:crawlerDownloadVideos.value,quality:crawlerYoutubeQuality.value,selected_fields:crawlerFields.value.filter(item=>item.enabled!==false).map(item=>item.name),target_ready:crawlerInputReady.value,latest_error:latestError(crawlerTasks.value)}
   if(view.value==='pdf')return {url_count:pdfUrls.value.split(/\r?\n/).filter(item=>item.trim()).length,has_excel:Boolean(pdfFile.value),filename_template:pdfFilenameTemplate.value,latest_error:latestError(pdfTasks.value)}
   if(view.value==='database')return {database_type:databaseType.value,connected:databaseConnected.value,selected_table:databaseSelectedTable.value,table_count:databaseTables.value.length}
@@ -326,7 +328,7 @@ function clearPropzone(){propzoneAreaLayers.forEach(layer=>propzoneMap?.removeLa
 function renderPropzoneZones(area){const old=propzoneAreaLayers.filter(layer=>layer._propzoneId===area.id&&layer._propzoneZoneLayer);old.forEach(layer=>propzoneMap?.removeLayer(layer));propzoneAreaLayers=propzoneAreaLayers.filter(layer=>!old.includes(layer));if(!area.zones?.length)return;const selected=new Set((area.selected_zone_ids||[]).map(String));const features=area.zones.filter(item=>selected.has(String(item.properties?.zone_id||'')));const replacement=L.geoJSON({type:'FeatureCollection',features},{style:f=>({color:f.properties?.color||'#4169e1',weight:1,fillColor:f.properties?.color||'#6c8ee8',fillOpacity:.28})});replacement._propzoneId=area.id;replacement._propzoneZoneLayer=true;propzoneAreaLayers.push(replacement);if(area.visible!==false)replacement.addTo(propzoneMap)}
 function togglePropzoneArea(area,event){const enabled=event.target.checked;area.visible=enabled;area.download=enabled;area.selected_zone_ids=enabled?(area.zones||[]).map(item=>String(item.properties?.zone_id||'')):[];propzoneAreaLayers.filter(layer=>layer._propzoneId===area.id&&layer._propzoneBoundaryLayer).forEach(layer=>{if(enabled)layer.addTo(propzoneMap);else propzoneMap?.removeLayer(layer)});renderPropzoneZones(area)}
 function togglePropzoneZone(area,zone){if(area.visible===false){area.visible=true;area.download=true;propzoneAreaLayers.filter(layer=>layer._propzoneId===area.id&&layer._propzoneBoundaryLayer).forEach(layer=>layer.addTo(propzoneMap))}const id=String(zone.properties?.zone_id||'');const initial=area.selected_zone_ids==null?(area.zones||[]).map(item=>String(item.properties?.zone_id||'')):area.selected_zone_ids;const ids=new Set(initial.map(String));ids.has(id)?ids.delete(id):ids.add(id);area.selected_zone_ids=[...ids];renderPropzoneZones(area)}
-async function submitPropzone(){const areas=propzoneSelected.value.filter(area=>area.download!==false).map(({zones,visible,download,...rest})=>rest);if(!areas.length)return alert('请至少勾选一个下载区域');propzoneSubmitting.value=true;try{await axios.post('/api/propzone/tasks',{areas,level:propzoneLevel.value});notify('全美行政区 SHP 下载任务已创建。','success');clearPropzone();propzoneQuery.value='';await loadPropzoneTasks()}catch(e){alert(e.response?.data?.detail||e.message)}finally{propzoneSubmitting.value=false}}
+async function submitPropzone(){const areas=propzoneSelected.value.filter(area=>area.download!==false).map(({zones,visible,download,...rest})=>rest);if(!areas.length)return alert('请至少勾选一个下载区域');propzoneSubmitting.value=true;try{await axios.post('/api/propzone/tasks',{areas,level:propzoneLevel.value,download_path:propzoneDownloadPath.value.trim()});notify('全美行政区 SHP 下载任务已创建。','success');clearPropzone();propzoneQuery.value='';await loadPropzoneTasks()}catch(e){alert(e.response?.data?.detail||e.message)}finally{propzoneSubmitting.value=false}}
 async function controlPropzone(task,action){if(action==='delete'&&!await ask(`删除“${task.name}”及全部 SHP 文件？`))return;try{if(action==='delete')await axios.delete(`/api/propzone/tasks/${task.id}`);else await axios.post(`/api/propzone/tasks/${task.id}/${action}`);await loadPropzoneTasks()}catch(e){alert(e.response?.data?.detail||e.message)}}
 async function selectDatabaseType(type){databaseType.value=type;databaseConnection.port=type==='redis'?6379:5432;databaseConnected.value=false;databaseTables.value=[];databaseSelectedTable.value='';databaseSchema.value=null;databaseRows.value=[];databaseTotal.value=0;databasePage.value=0;databaseClientTab.value='data';databaseAddingRow.value=false;databaseEditingRow.value=-1;databaseObjectQuery.value='';if(type==='sqlite'&&databaseConnection.sqlite_path)await testDatabase(true)}
 async function pickSqliteFile(){
@@ -479,9 +481,19 @@ async function uploadShp(){
   const data=new FormData();shpFiles.value.forEach(file=>data.append('files',file,file.webkitRelativePath||file.name));shpUploading.value=true
   try{const created=(await axios.post('/api/shp-preview/layers',data)).data;for(const meta of created)await addShpLayer(meta);shpFiles.value=[];if(shpInput.value)shpInput.value.value='';notify(`已添加 ${created.length} 个 SHP 图层。`,'success');if(created.length)locateShp(shpLayers.value.find(x=>x.id===created[created.length-1].id))}catch(e){alert(e)}finally{shpUploading.value=false}
 }
+async function openShpDirectory(){const path=shpDirectory.value.trim();if(!path)return alert('请填写服务器上的绝对路径');shpUploading.value=true;try{const created=(await axios.post('/api/shp-preview/layers/open',{path})).data;for(const meta of created)await addShpLayer(meta);notify(`已读取 ${created.length} 个 SHP 图层。`,'success');if(created.length)locateShp(shpLayers.value.find(x=>x.id===created[created.length-1].id))}catch(e){alert(e.response?.data?.detail||e.message)}finally{shpUploading.value=false}
+}
+async function openConvertedShp(path){
+  if(!path)return
+  go('shp')
+  await nextTick()
+  initShpMap()
+  shpDirectory.value=path
+  await openShpDirectory()
+}
 function toggleShp(item){item.visible=!item.visible;if(item.visible)item.layer.addTo(shpMap);else shpMap.removeLayer(item.layer)}
 function locateShp(item){if(!item?.layer)return;const bounds=item.layer.getBounds();if(bounds.isValid())shpMap.fitBounds(bounds,{padding:[30,30]})}
-async function deleteShp(item){if(!await ask(`删除“${item.name}”图层及上传的 SHP 文件组？`))return;try{await axios.delete(`/api/shp-preview/layers/${item.id}`);if(item.layer)shpMap.removeLayer(item.layer);shpLayers.value=shpLayers.value.filter(x=>x.id!==item.id);notify('SHP 图层已删除。','success')}catch(e){alert(e)}}
+async function deleteShp(item){const message=item.external?`从列表移除“${item.name}”？硬盘上的 SHP 文件不会被删除。`:`删除“${item.name}”图层及上传的 SHP 文件组？`;if(!await ask(message))return;try{await axios.delete(`/api/shp-preview/layers/${item.id}`);if(item.layer)shpMap.removeLayer(item.layer);shpLayers.value=shpLayers.value.filter(x=>x.id!==item.id);notify('SHP 图层已删除。','success')}catch(e){alert(e)}}
 
 function boundsOf(item){const b=item.layer.getBounds();return {west:b.getWest(),south:b.getSouth(),east:b.getEast(),north:b.getNorth()}}
 function clearAreas(){layers.value.forEach(x=>map.value.removeLayer(x.layer));layers.value=[]}
@@ -497,7 +509,7 @@ function resetMapDownloadForm(){
   clearAreas();regionQuery.value='';regionResults.value=[]
   map.value?.pm?.disableDraw()
   mapCategory.value='imagery'
-  Object.assign(form,{data_type:'satellite',tile_source:'google_satellite',zoom_min:1,zoom_max:17,max_workers:8,split_size:2048,output_format:'png'})
+  Object.assign(form,{data_type:'satellite',tile_source:'google_satellite',zoom_min:1,zoom_max:17,max_workers:8,split_size:2048,output_format:'png',png_width:0,png_height:0,download_path:'',pack_mbtiles:false})
 }
 async function searchRegions(){
   if(regionQuery.value.trim().length<2) return
@@ -516,7 +528,9 @@ async function submit(){
   if(!source||form.zoom_min<source.minZoom||form.zoom_max>source.maxZoom||form.zoom_min>form.zoom_max)return alert(`所选数据源仅支持 Z${source?.minZoom??0}–Z${source?.maxZoom??20}，请检查起止层级`)
   submitting.value=true
   try{
-    const payload={tasks:layers.value.map(item=>({bounds:boundsOf(item),geometry:item.geometry,options:{...form,output_name:item.name?.split(',')[0]||''}}))}
+    const pngWidth=form.output_format==='png'?Math.round(Number(form.png_width)||0):0
+    const pngHeight=form.output_format==='png'?Math.round(Number(form.png_height)||0):0
+    const payload={tasks:layers.value.map(item=>({bounds:boundsOf(item),geometry:item.geometry,options:{...form,png_width:pngWidth,png_height:pngHeight,download_path:(form.download_path||'').trim(),pack_mbtiles:form.output_format==='png'&&form.data_type!=='dem'&&!!form.pack_mbtiles,output_name:item.name?.split(',')[0]||''}}))}
     await axios.post('/api/tasks/batch',payload);notify('下载任务已加入队列，可在任务列表查看进度。','success');resetMapDownloadForm();await loadTasks()
   }catch(e){alert(e.response?.data?.detail||e.message)}finally{submitting.value=false}
 }
@@ -544,8 +558,11 @@ async function submitGjb(){
   const data=new FormData();gjbFiles.value.forEach(file=>data.append('files',file,file.name));data.append('crs',gjbForm.crs)
   gjbSubmitting.value=true;try{const created=(await axios.post('/api/gjb/tasks',data)).data;notify('文件上传完成，转换任务已开始。','success');autoPreviewTaskId.value=created.id;gjbFiles.value=[];gjbForm.crs='auto';if(gjbInput.value)gjbInput.value.value='';await loadGjbTasks()}catch(e){alert(e)}finally{gjbSubmitting.value=false}
 }
+async function submitGjbPath(){const source=gjbForm.source_path.trim();if(!source)return alert('请填写服务器上的 GJB 目录');if(gjbForm.crs!=='auto')return alert('坐标系只能根据 SMS 自动识别');gjbSubmitting.value=true;try{const created=(await axios.post('/api/gjb/tasks/open',{source_path:source,output_path:gjbForm.in_place?'':gjbForm.output_path.trim(),in_place:gjbForm.in_place,crs:'auto'})).data;notify(gjbForm.in_place?'已开始在原目录转换。':'已开始从服务器目录转换。','success');autoPreviewTaskId.value=created.id;gjbForm.source_path='';gjbForm.output_path='';gjbForm.in_place=false;await loadGjbTasks()}catch(e){alert(e.response?.data?.detail||e.message)}finally{gjbSubmitting.value=false}
+}
 async function controlGjb(task,action){
-  if(action==='delete'&&!await ask(`删除后将同时清理“${task.name}”转换结果及上传文件，此操作无法撤销。`))return
+  const removing=task.request?.in_place?`从任务列表移除“${task.name}”？原目录中的 Shapefile 会保留。`:task.request?.source_path?`删除“${task.name}”的转换结果？源目录不会被删除。`:`删除后将同时清理“${task.name}”转换结果及上传文件，此操作无法撤销。`
+  if(action==='delete'&&!await ask(removing))return
   try{if(action==='delete'){await axios.delete(`/api/gjb/tasks/${task.id}`);if(previewTask.value?.id===task.id){previewTask.value=null;if(gjbMap){gjbMap.remove();gjbMap=null}}if(autoPreviewTaskId.value===task.id)autoPreviewTaskId.value=null}else await axios.post(`/api/gjb/tasks/${task.id}/retry`);await loadGjbTasks()}catch(e){alert(e.response?.data?.detail||e.message)}
 }
 async function previewGjb(task){
@@ -602,9 +619,16 @@ function statusText(s){return {scheduled:'等待定时执行',queued:'排队中'
 function dateText(v){return new Date(v).toLocaleString('zh-CN')}
 async function applyAiPatch(patch){
   const target=patch?.target,values=patch?.values||{}
-  if(!['map','pdf','crawler','json'].includes(target))throw new Error('此工具尚未接入配置应用，请使用页面操作。')
+  if(!['map','pdf','crawler','json','raster-clip','vector'].includes(target))throw new Error('此工具尚未接入配置应用，请使用页面操作。')
   if(target&&target!==view.value){go(target);await nextTick()}
   if(target==='json'){jsonAiPatch.value={...values,revision:Date.now()};return}
+  if(target==='raster-clip'||target==='vector'){
+    const patch={...values,revision:Date.now()}
+    if(target==='raster-clip')rasterAiPatch.value=patch
+    else vectorAiPatch.value=patch
+    notify('AI 建议配置已填入，请确认后再执行。','success')
+    return
+  }
   if(target==='map'){
     if(typeof values.region_query==='string')regionQuery.value=values.region_query
     const source=tileSources.find(item=>item.id===values.tile_source)
@@ -613,6 +637,10 @@ async function applyAiPatch(patch){
     const selectedSource=tileSources.find(item=>item.id===form.tile_source)||availableTileSources.value[0]
     if(selectedSource){form.zoom_min=Math.max(selectedSource.minZoom,Math.min(selectedSource.maxZoom,Number(values.zoom_min??form.zoom_min)));form.zoom_max=Math.max(form.zoom_min,Math.min(selectedSource.maxZoom,Number(values.zoom_max??form.zoom_max)))}
     if(['png','tif'].includes(values.output_format))form.output_format=values.output_format
+    if(Number.isFinite(Number(values.png_width)))form.png_width=Math.max(0,Math.min(8192,Math.round(Number(values.png_width))))
+    if(Number.isFinite(Number(values.png_height)))form.png_height=Math.max(0,Math.min(8192,Math.round(Number(values.png_height))))
+    if(typeof values.download_path==='string')form.download_path=values.download_path.trim()
+    if(typeof values.pack_mbtiles==='boolean')form.pack_mbtiles=values.pack_mbtiles
     if(Number.isInteger(Number(values.max_workers)))form.max_workers=Math.max(1,Math.min(16,Number(values.max_workers)))
   }else if(target==='pdf'){
     if(Array.isArray(values.urls))pdfUrls.value=values.urls.filter(Boolean).join('\n')
@@ -655,7 +683,7 @@ async function loadLinks(){
   finally{linksLoaded.value=true}
 }
 // 工具分类（设置弹窗里改过的顺序/名字/图标/归属）由 catalogState 自己读；它吞掉异常，
-// 读不到时合并视图就是代码里那 6 组 18 卡，首页照常能开。见 onMounted 的 Promise.all。
+// 读不到时合并视图就是代码里那 6 组 24 卡，首页照常能开。见 onMounted 的 Promise.all。
 // 路由就是 hash：#link:<id>。go()/syncHash() 原样搬运，不用为它加分支。
 const linkId=computed(()=>view.value.startsWith('link:')?view.value.slice(5):'')
 const currentLink=computed(()=>links.value.find(item=>item.id===linkId.value)||null)
@@ -690,6 +718,8 @@ onBeforeUnmount(()=>{clearInterval(timer);stopDouyinLoginPolling();clearTimeout(
     <ExternalToolPage v-if="linkId&&linksLoaded" :tool="currentLink" :offline="linksFailed" />
     <SettingsDialog v-if="settingsOpen" :links="links" :confirm-action="ask" :icon-component="AiIcon" :icon-names="iconNames" @close="closeSettings" @saved="loadLinks" />
     <TilePreviewTool v-if="view==='tile-viewer'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
+    <RasterClipTool v-if="view==='raster-clip'" :confirm-action="ask" :ai-patch="rasterAiPatch" @notify="(message,type)=>notify(message,type)" />
+    <VectorConvertTool v-if="view==='vector'" :confirm-action="ask" :ai-patch="vectorAiPatch" @notify="(message,type)=>notify(message,type)" @open-shp="openConvertedShp" />
     <DbxPage v-if="view==='dbx'" />
     <DockerComposeManager v-if="view==='compose-manager'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
     <section v-if="view==='crawler'" class="crawler-page">
@@ -885,12 +915,12 @@ onBeforeUnmount(()=>{clearInterval(timer);stopDouyinLoginPolling();clearTimeout(
     </section>
     <section v-if="view==='shp'" class="shp-page">
       <header><div><span class="eyebrow">SHAPEFILE VIEWER</span><h1>SHP 文件预览</h1><p>多次追加上传一个或多个 Shapefile 文件组，在卫星地图中对齐叠加预览。</p></div></header>
-      <div class="shp-workspace"><aside class="panel"><div class="panel-title"><b>图层文件</b><span>{{shpLayers.length}} 个图层</span></div><label>选择 SHP 文件组<input ref="shpInput" class="folder-input" type="file" multiple accept=".shp,.shx,.dbf,.prj,.cpg" @change="chooseShpFiles"></label><div class="file-summary">{{shpFiles.length?`已识别 ${selectedShpGroupCount} 个 SHP 图层`:'请选择同名的 SHP、SHX、DBF、PRJ 文件，CPG 可选'}}</div><button class="primary shp-upload" :disabled="shpUploading||!selectedShpGroupCount" @click="uploadShp">{{shpUploading?'正在解析…':'上传并添加图层'}}</button><div class="shp-layer-list"><div v-if="!shpLayers.length" class="shp-empty">尚未添加图层</div><article v-for="item in shpLayers" :key="item.id"><button class="visibility" :class="{off:!item.visible}" :aria-label="item.visible?'隐藏图层':'显示图层'" @click="toggleShp(item)">{{item.visible?'●':'○'}}</button><div><b>{{item.name}}</b><small>{{item.shape_type}} · {{item.feature_count}} 个要素</small><small>{{item.crs}}</small></div><div class="shp-actions"><button @click="locateShp(item)">定位</button><button class="danger" @click="deleteShp(item)">删除</button></div></article></div></aside><div ref="shpMapEl" class="shp-map"></div></div>
+      <div class="shp-workspace"><aside class="panel"><div class="panel-title"><b>图层文件</b><span>{{shpLayers.length}} 个图层</span></div><label>选择 SHP 文件组<input ref="shpInput" class="folder-input" type="file" multiple accept=".shp,.shx,.dbf,.prj,.cpg" @change="chooseShpFiles"></label><div class="file-summary">{{shpFiles.length?`已识别 ${selectedShpGroupCount} 个 SHP 图层`:'请选择同名的 SHP、SHX、DBF、PRJ 文件，CPG 可选'}}</div><button class="primary shp-upload" :disabled="shpUploading||!selectedShpGroupCount" @click="uploadShp">{{shpUploading?'正在解析…':'上传并添加图层'}}</button><label>或读取服务器目录<input v-model="shpDirectory" placeholder="/mnt/external/shp" spellcheck="false"></label><button class="primary shp-upload" :disabled="shpUploading||!shpDirectory.trim()" @click="openShpDirectory">{{shpUploading?'正在读取…':'直接读取目录'}}</button><div class="shp-layer-list"><div v-if="!shpLayers.length" class="shp-empty">尚未添加图层</div><article v-for="item in shpLayers" :key="item.id"><button class="visibility" :class="{off:!item.visible}" :aria-label="item.visible?'隐藏图层':'显示图层'" @click="toggleShp(item)">{{item.visible?'●':'○'}}</button><div><b>{{item.name}}</b><small>{{item.shape_type}} · {{item.feature_count}} 个要素</small><small>{{item.crs}}</small></div><div class="shp-actions"><button @click="locateShp(item)">定位</button><button class="danger" @click="deleteShp(item)">删除</button></div></article></div></aside><div ref="shpMapEl" class="shp-map"></div></div>
     </section>
     <section v-if="view==='gjb'" class="gjb-page">
       <header><div><span class="eyebrow">GJB5068 CONVERTER</span><h1>GJB 地图转 Shapefile</h1><p>上传完整 GJB 图幅目录，解析多图层组的点、线、面和注记并生成标准 GIS 文件。</p></div></header>
-      <div class="gjb-workspace"><aside class="panel"><div class="panel-title"><b>转换配置</b><span>GJB5068-2004</span></div><label>GJB 图幅目录<input ref="gjbInput" class="folder-input" type="file" webkitdirectory directory multiple @change="chooseGjbFiles"></label><div class="file-summary">{{gjbFiles.length?`已选择 ${gjbFiles.length} 个文件`:'请选择包含 SMS 及 XMS、XSX、XTP、XZB 图层组的目录'}}</div><label>输出坐标系<select v-model="gjbForm.crs" disabled><option value="auto">根据 SMS 自动识别</option></select></label><div class="hint">支持 A/B/C/D/E/F/I/J/K/L/R 图层组和 P/L/A/N 几何。将应用 SMS 相对原点与坐标放大系数，并按点、线、面、注记各输出一份合并 Shapefile。</div><button class="primary docker-submit" :disabled="gjbSubmitting||!gjbFiles.length" @click="submitGjb">{{gjbSubmitting?'正在上传…':'上传并开始转换'}}</button></aside><div class="gjb-preview"><div v-if="!previewTask" class="preview-empty"><b>转换结果预览</b><p>转换完成后自动预览合并后的点、线、面和注记。</p></div><template v-else><div class="preview-head"><b>{{previewTask.name}}</b><span>{{previewTask.result?.feature_count}} 个要素 · {{previewTask.result?.crs}}</span></div><div ref="gjbMapEl" class="preview-map"></div></template></div></div>
-      <section class="queue"><div class="queue-head"><div><span class="eyebrow">CONVERSION QUEUE</span><h2>转换任务</h2></div><button class="refresh" @click="loadGjbTasks">刷新</button></div><div v-if="!gjbTasks.length" class="empty">暂无 GJB 转换任务。</div><article v-for="task in gjbTasks" :key="task.id" class="task"><div class="task-main"><div class="task-icon"><AiIcon name="layers" /></div><div><b>{{task.name}}</b><small>{{dateText(task.created_at)}} · {{task.request.crs || '自动坐标系'}} · {{task.id.slice(0,8)}}</small></div></div><div class="progress"><div><span>{{task.message}}</span><strong>{{task.progress}}%</strong></div><div class="track"><i :class="task.status" :style="{width:task.progress+'%'}"></i></div><small v-if="task.error" class="error">{{task.error}}</small></div><span class="badge" :class="task.status">{{statusText(task.status)}}</span><div class="task-actions"><button v-if="task.status==='failed'" class="retry" @click="controlGjb(task,'retry')">重试</button><button v-if="task.status==='completed'" @click="previewGjb(task)">预览</button><a v-if="task.status==='completed'" :href="`/api/gjb/tasks/${task.id}/export`">下载</a><button class="danger" @click="controlGjb(task,'delete')">删除</button></div></article></section>
+      <div class="gjb-workspace"><aside class="panel"><div class="panel-title"><b>转换配置</b><span>GJB5068-2004</span></div><label>GJB 图幅目录<input ref="gjbInput" class="folder-input" type="file" webkitdirectory directory multiple @change="chooseGjbFiles"></label><div class="file-summary">{{gjbFiles.length?`已选择 ${gjbFiles.length} 个文件`:'请选择包含 SMS 及 XMS、XSX、XTP、XZB 图层组的目录'}}</div><label>输出坐标系<select v-model="gjbForm.crs" disabled><option value="auto">根据 SMS 自动识别</option></select></label><button class="primary docker-submit" :disabled="gjbSubmitting||!gjbFiles.length" @click="submitGjb">{{gjbSubmitting?'正在上传…':'上传并开始转换'}}</button><div class="gjb-divider"><span>或直接读取服务器目录</span></div><label>GJB 目录<input v-model="gjbForm.source_path" placeholder="/mnt/external/gjb" spellcheck="false"></label><div class="gjb-output"><label class="check-label"><input v-model="gjbForm.in_place" type="checkbox"><span>在原目录转换，不打包下载</span></label><small>{{gjbForm.in_place?'Shapefile 写回上面的目录，不生成压缩包，预览文件也不会放进该目录。':'写入单独的输出目录，完成后可以下载压缩包。'}}</small><label v-if="!gjbForm.in_place">输出路径<input v-model="gjbForm.output_path" placeholder="留空则保存在服务器本地" spellcheck="false"></label></div><button class="primary docker-submit" :disabled="gjbSubmitting||!gjbForm.source_path.trim()" @click="submitGjbPath">{{gjbSubmitting?'正在提交…':'从服务器目录转换'}}</button><div class="hint">支持 A/B/C/D/E/F/I/J/K/L/R 图层组和 P/L/A/N 几何。目录可达时直接转换，已生成的 Shapefile 会在重试时跳过。</div></aside><div class="gjb-preview"><div v-if="!previewTask" class="preview-empty"><b>转换结果预览</b><p>转换完成后自动预览合并后的点、线、面和注记。</p></div><template v-else><div class="preview-head"><b>{{previewTask.name}}</b><span>{{previewTask.result?.feature_count}} 个要素 · {{previewTask.result?.crs}}</span></div><div ref="gjbMapEl" class="preview-map"></div></template></div></div>
+      <section class="queue"><div class="queue-head"><div><span class="eyebrow">CONVERSION QUEUE</span><h2>转换任务</h2></div><button class="refresh" @click="loadGjbTasks">刷新</button></div><div v-if="!gjbTasks.length" class="empty">暂无 GJB 转换任务。</div><article v-for="task in gjbTasks" :key="task.id" class="task"><div class="task-main"><div class="task-icon"><AiIcon name="layers" /></div><div><b>{{task.name}}</b><small>{{dateText(task.created_at)}} · {{task.request.crs || '自动坐标系'}} · {{task.id.slice(0,8)}}</small></div></div><div class="progress"><div><span>{{task.message}}</span><strong>{{task.progress}}%</strong></div><div class="track"><i :class="task.status" :style="{width:task.progress+'%'}"></i></div><small v-if="task.error" class="error">{{task.error}}</small></div><span class="badge" :class="task.status">{{statusText(task.status)}}</span><div class="task-actions"><button v-if="task.status==='failed'" class="retry" @click="controlGjb(task,'retry')">重试</button><button v-if="task.status==='completed'" @click="previewGjb(task)">预览</button><a v-if="task.status==='completed'&&!task.request?.in_place" :href="`/api/gjb/tasks/${task.id}/export`">下载</a><button class="danger" @click="controlGjb(task,'delete')">删除</button></div></article></section>
     </section>
     <section v-if="view==='propzone'" class="propzone-page">
       <header><div><span class="eyebrow">PROPZONE · USA DATASET</span><h1>全美行政区域 SHP 下载</h1><p>搜索或在地图中点选美国行政区域，获取 PropZone zoning 数据；无 zoning 记录时导出行政区边界。</p></div></header>
@@ -900,7 +930,7 @@ onBeforeUnmount(()=>{clearInterval(timer);stopDouyinLoginPolling();clearTimeout(
         <label>搜索{{propzoneLevelName(propzoneLevel)}}<div class="searchbox"><input v-model="propzoneQuery" :placeholder="propzoneLevel==='state'?'留空可加载全部州':propzoneLevel==='county'?'例如 Los Angeles County':'城市名称或粘贴 PropZone 官方 URL'" @keyup.enter="searchPropzone"><button @click="searchPropzone">{{propzoneSearching?'…':'搜索'}}</button></div></label>
         <div v-if="propzoneResults.length" class="propzone-results"><button v-for="area in propzoneResults" :key="area.id" @click="selectPropzoneResult(area)"><b>{{area.short_name}}</b><small>{{area.name}}</small><em>{{area.type}} · {{area.state?.toUpperCase()||'US'}}</em></button></div><div v-else-if="propzoneQuery.trim().length>=2&&!propzoneSearching" class="propzone-results-empty">没有匹配的行政区域；可尝试完整 County/城市名称，或粘贴 PropZone 官方路径。</div>
         <div class="propzone-selected"><div class="selected-head"><b>已选择区域</b><button v-if="propzoneSelected.length" @click="clearPropzone">清空</button></div><div v-if="!propzoneSelected.length" class="muted">搜索结果后点击地图或结果项加入</div><article v-for="area in propzoneSelected" :key="area.id" class="propzone-area-card"><div class="propzone-area-main"><div class="propzone-area-title"><input :checked="area.visible!==false" type="checkbox" @change="togglePropzoneArea(area,$event)"><b>{{area.short_name}}</b><small>{{area.state?.toUpperCase()}} · {{area.type}}</small><button v-if="area.type==='state'||String(area.name||'').toLowerCase().includes('state')" class="propzone-children-btn" @click="loadPropzoneChildren(area)">{{propzoneChildrenLoading[area.id]?'加载中…':area.children_loaded?'已加载下级':'加载下级'}}</button><button v-if="area.zones?.length||area.children?.length" type="button" class="propzone-details-toggle" :class="{collapsed:area.details_expanded===false}" :aria-label="area.details_expanded===false?'展开图层':'收起图层'" :title="area.details_expanded===false?'展开图层':'收起图层'" @click="area.details_expanded=area.details_expanded===false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 8 5 5 5-5"/></svg></button></div><div v-show="area.details_expanded!==false" class="propzone-area-details"><div v-if="area.children?.length" class="propzone-children-tree"><label v-for="child in area.children" :key="child.id"><input type="checkbox" :checked="propzoneSelected.some(item=>propzoneAreaKey(item)===propzoneAreaKey(child))" @change="togglePropzoneChild(child,$event)"><span>{{child.short_name}}</span></label></div><div v-if="area.zones?.length" class="propzone-zones"><div class="propzone-zones-head"><span>ZONE 图层</span><small>{{area.selected_zone_ids==null?area.zones.length:area.selected_zone_ids.length}} / {{area.zones.length}}</small></div><label v-for="zone in area.zones" :key="zone.properties?.zone_id"><input type="checkbox" :checked="area.selected_zone_ids==null||area.selected_zone_ids.includes(String(zone.properties?.zone_id||''))" @change="togglePropzoneZone(area,zone)"><i :style="{background:zone.properties?.color||'#4169e1'}"></i><span>{{zone.properties?.zone_code||'未命名区域'}}</span></label></div><div v-else class="propzone-no-zones">该区域暂无可用 ZONE 图层，将下载行政区边界。</div></div></div><button class="propzone-remove" @click="removePropzoneArea(area)">×</button></article></div>
-        <div class="hint">可直接点击右侧卫星地图识别附近行政区域，也可使用搜索结果。下载内容优先使用 PropZone municipal zoning district 图层，并保留 zone_id、zone_code、color 字段。</div>
+        <label>下载路径<input v-model="propzoneDownloadPath" placeholder="/mnt/external/propzone" spellcheck="false"></label><div class="hint">可直接点击右侧卫星地图识别附近行政区域，也可使用搜索结果。下载路径留空保存在服务器本地；填写已挂载目录的绝对路径时，文件直接写到外接磁盘。中断后重试会跳过已经下载的区域。</div>
         <button class="primary propzone-submit" :disabled="propzoneSubmitting||!propzoneSelected.length" @click="submitPropzone">{{propzoneSubmitting?'提交中…':'创建 SHP 下载任务'}}</button>
       </aside><div ref="propzoneMapEl" class="propzone-map"></div></div>
       <section class="queue"><div class="queue-head"><div><span class="eyebrow">PROPZONE TASK QUEUE</span><h2>下载任务</h2></div><button class="refresh" @click="loadPropzoneTasks">刷新</button></div><div v-if="!propzoneTasks.length" class="empty">暂无全美行政区下载任务。</div><article v-for="task in propzoneTasks" :key="task.id" class="task"><div class="task-main"><div class="task-icon"><AiIcon name="layers" /></div><div><b>{{task.name}}</b><small>{{dateText(task.created_at)}} · {{task.current||0}}/{{task.total||0}} 个区域 · {{task.id.slice(0,8)}}</small></div></div><div class="progress"><div><span>{{task.message}}</span><strong>{{task.progress}}%</strong></div><div class="track"><i :class="task.status" :style="{width:task.progress+'%'}"></i></div><small v-if="task.error" class="error">{{task.error}}</small></div><span class="badge" :class="task.status">{{statusText(task.status)}}</span><div class="task-actions"><button v-if="task.status==='queued'||task.status==='running'" @click="controlPropzone(task,'pause')">暂停</button><button v-if="task.status==='paused'" class="resume" @click="controlPropzone(task,'resume')">继续</button><button v-if="task.status==='failed'" class="retry" @click="controlPropzone(task,'retry')">重试</button><a v-if="task.status==='completed'" class="export" :href="`/api/propzone/tasks/${task.id}/export`">下载 SHP</a><button class="danger" @click="controlPropzone(task,'delete')">删除</button></div></article></section>
@@ -915,8 +945,12 @@ onBeforeUnmount(()=>{clearInterval(timer);stopDouyinLoginPolling();clearTimeout(
         <div class="grid2"><label>地图数据<select v-model="mapCategory"><option value="imagery">卫星与航拍影像</option><option value="standard">标准地图</option><option value="terrain">地形地图</option><option value="dem">DEM 高程数据</option></select></label><label>数据源<select v-model="form.tile_source"><option v-for="source in availableTileSources" :key="source.id" :value="source.id">{{source.name}}</option></select></label></div>
         <div class="grid2"><label>起始层级<input v-model.number="form.zoom_min" type="number" :min="selectedTileSource?.minZoom" :max="selectedTileSource?.maxZoom"></label><label>结束层级<input v-model.number="form.zoom_max" type="number" :min="selectedTileSource?.minZoom" :max="selectedTileSource?.maxZoom"></label></div><div v-if="selectedTileSource" class="source-zoom-limit">{{selectedTileSource.name}} 支持 Z{{selectedTileSource.minZoom}}–Z{{selectedTileSource.maxZoom}}</div>
         <label>导出格式<select v-model="form.output_format" :disabled="form.data_type==='dem'"><option value="png">PNG 图片</option><option value="tif">GeoTIFF · EPSG:3857</option></select></label>
+        <div v-if="form.output_format==='png'&&form.data_type!=='dem'" class="grid2"><label>PNG 宽度<input v-model.number="form.png_width" type="number" min="0" max="8192" placeholder="0"></label><label>PNG 高度<input v-model.number="form.png_height" type="number" min="0" max="8192" placeholder="0"></label></div>
+        <label v-if="form.output_format==='png'&&form.data_type!=='dem'" class="check-label"><input v-model="form.pack_mbtiles" type="checkbox"><span>同时打包为 MBTiles</span></label>
+        <small v-if="form.pack_mbtiles&&form.output_format==='png'&&form.data_type!=='dem'" class="map-field-help">写在任务目录里，和 z/x/y 瓦片放在一起，并打进同一个压缩包。已经写入的瓦片会跳过。</small>
         <div class="grid2"><label>并发线程<input v-model.number="form.max_workers" type="number" min="1" max="16"></label><label>GeoTIFF 分块边长<select v-model.number="form.split_size" :disabled="form.output_format!=='tif'" aria-describedby="map-split-help"><option :value="1024">1024 px</option><option :value="2048">2048 px</option><option :value="4096">4096 px</option><option :value="8192">8192 px</option></select><small id="map-split-help" class="map-field-help">{{form.output_format==='tif'?'每个输出分块的像素边长':'选择 GeoTIFF 后可设置'}}</small></label></div>
-        <div class="hint" v-if="form.data_type==='dem'">地图已切换为分层设色高程图。DEM 以米为单位输出分块 Float32 GeoTIFF，文件在 ZIP 根目录平铺，最高支持 Z15。</div><div class="hint" v-else>任务名称将根据行政区名称或框选坐标自动生成。{{form.output_format==='tif'?'GeoTIFF 按固定像素矩阵分块输出，行政区边界之外填充为黑色。':'PNG 保留原始瓦片，按标准 z/x/y.png 目录保存。'}}</div>
+        <label>下载路径<input v-model="form.download_path" placeholder="/mnt/external/maps" spellcheck="false"></label>
+        <div class="hint" v-if="form.data_type==='dem'">地图已切换为分层设色高程图。DEM 以米为单位输出分块 Float32 GeoTIFF，文件在 ZIP 根目录平铺，最高支持 Z15。下载路径留空则保存在服务器本地；填写已挂载目录的绝对路径时，结果直接写到该磁盘。</div><div class="hint" v-else>任务名称将根据行政区名称或框选坐标自动生成。{{form.output_format==='tif'?'GeoTIFF 按固定像素矩阵分块输出，行政区边界之外填充为黑色。':(Number(form.png_width)>0&&Number(form.png_height)>0?`仍按 z/x/y.png 保存，每张瓦片缩放到 ${form.png_width}×${form.png_height}。`:'PNG 宽高留 0 时保留原始 256 瓦片，按标准 z/x/y.png 目录保存。')}} 下载路径留空保存在服务器本地；填写已挂载目录的绝对路径时，文件直接写到外接磁盘，中断后重试会跳过已完成的内容。</div>
         <div class="actions"><button class="ghost" @click="clearAreas">清空</button><button class="primary" :disabled="!selected||submitting" @click="submit">{{submitting?'提交中…':`创建 ${selected||''} 个任务`}}</button></div>
       </aside>
       <div ref="mapEl" class="map"></div>

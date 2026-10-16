@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .local_path import resolve_directory
 import geopandas as gpd
 import requests
 from shapely.geometry import shape
@@ -270,12 +271,18 @@ class PropZoneTaskManager:
         self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="propzone-task"); self.controls = {}
         try: self.tasks = json.loads(self.state_file.read_text("utf-8"))
         except (FileNotFoundError, json.JSONDecodeError): self.tasks = {}
+        resume_ids = []
         for task in self.tasks.values():
-            if task.get("status") in ("queued", "running", "paused"): task.update(status="failed", message="服务重启，任务已中断")
+            if task.get("status") in ("queued", "running"):
+                task.update(status="queued", message="服务重启，从已下载内容继续", error=None)
+                resume_ids.append(task["id"])
         self._save()
         # 首次启动即落盘州级离线目录，页面在完全断网时也能定位州并加载其缓存。
         if "state:__all__" not in self._read_cache():
             self.cached_search("", "state")
+        for task_id in resume_ids:
+            self.controls[task_id] = _Control()
+            self.pool.submit(self._run, task_id)
     def _read_cache(self):
         try:
             value = json.loads(self.cache_file.read_text("utf-8"))
@@ -383,24 +390,63 @@ class PropZoneTaskManager:
         with self.lock: return sorted(self.tasks.values(), key=lambda x: x["created_at"], reverse=True)
     def get(self, task_id):
         with self.lock: return self.tasks.get(task_id)
-    def create(self, areas, level="all"):
+    def create(self, areas, level="all", download_path=""):
         if not areas: raise ValueError("请至少选择一个行政区域")
+        raw = str(download_path or "").strip()
+        root = resolve_directory(raw, writable=True) if raw else self.data_dir
         task_id, now = uuid.uuid4().hex, datetime.now(timezone.utc).isoformat()
         label = "、".join(str(a.get("short_name") or a.get("name") or "美国区域").split(",")[0] for a in areas[:3])
         if len(areas) > 3: label += f" 等 {len(areas)} 个区域"
         level_name = {"all": "行政区域", "state": "州", "county": "County", "city": "城市"}.get(level, "行政区域")
         record = {"id": task_id, "name": f"美国{level_name} · {label}", "status": "queued", "progress": 0,
                   "current": 0, "total": len(areas), "message": "等待下载", "created_at": now, "updated_at": now,
-                  "request": {"areas": areas, "level": level, "output_format": "shp"}, "result": None, "error": None}
+                  "output_dir": str(root / task_id),
+                  "request": {"areas": areas, "level": level, "output_format": "shp", "download_path": raw}, "result": None, "error": None}
         with self.lock: self.tasks[task_id] = record; self.controls[task_id] = _Control(); self._save()
         self.pool.submit(self._run, task_id); return record
+    def _task_dir(self, task_id):
+        task = self.tasks.get(task_id) or {}
+        raw = task.get("output_dir") or ""
+        path = Path(raw) if raw else self.data_dir / task_id
+        if path.name != task_id:
+            raise ValueError("任务输出目录无效")
+        return path
+    @staticmethod
+    def _read_area_cache(path: Path):
+        if not path.is_file() or path.stat().st_size < 2:
+            return None
+        try:
+            value = json.loads(path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        return value if isinstance(value, list) else None
+    @staticmethod
+    def _write_area_cache(path: Path, features):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".part")
+        temp.write_text(json.dumps(features, ensure_ascii=False), "utf-8")
+        temp.replace(path)
     def _run(self, task_id):
-        task_dir = self.data_dir / task_id; output_dir = task_dir / "output"; output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            task_dir = self._task_dir(task_id)
+        except ValueError as exc:
+            self._update(task_id, status="failed", message="下载失败", error=str(exc))
+            with self.lock: self.controls.pop(task_id, None)
+            return
+        output_dir = task_dir / "output"; output_dir.mkdir(parents=True, exist_ok=True)
         control = self.controls.get(task_id)
         try:
             areas = self.tasks[task_id]["request"]["areas"]; features = []
             for index, area in enumerate(areas, 1):
-                control.checkpoint(); self._update(task_id, status="running", message=f"正在获取 {area.get('short_name') or area.get('name', '区域')} 数据")
+                control.checkpoint()
+                cache = task_dir / "areas" / f"{index}.geojson"
+                cached = self._read_area_cache(cache)
+                label = area.get("short_name") or area.get("name", "区域")
+                if cached is not None:
+                    features.extend(cached)
+                    self._update(task_id, status="running", current=index, progress=round(index / len(areas) * 85, 1), message=f"已跳过已下载区域 {label}（{index}/{len(areas)}）")
+                    continue
+                self._update(task_id, status="running", message=f"正在获取 {label} 数据")
                 try:
                     zoning = self.client.fetch_zoning(area)
                 except Exception as exc:
@@ -413,6 +459,7 @@ class PropZoneTaskManager:
                 if not zoning and area.get("geometry"):
                     zoning = [{"type": "Feature", "geometry": area["geometry"],
                                "properties": {"zone_id": area.get("id", ""), "zone_code": area.get("short_name") or area.get("name", "区域"), "color": "#4169e1"}}]
+                self._write_area_cache(cache, zoning)
                 features.extend(zoning); self._update(task_id, current=index, progress=round(index / len(areas) * 85, 1), message=f"已获取 {index}/{len(areas)} 个区域")
             if not features: raise RuntimeError("所选区域没有可下载的边界或 zoning 数据")
             geojson = {"type": "FeatureCollection", "features": features}
@@ -425,9 +472,12 @@ class PropZoneTaskManager:
             name = re.sub(r"[^\w\-一-龥]+", "_", self.tasks[task_id]["name"])[:80] or "propzone"
             shp_path = output_dir / f"{name}.shp"; gdf.to_file(shp_path, driver="ESRI Shapefile", encoding="UTF-8")
             (output_dir / f"{name}.cpg").write_text("UTF-8", "ascii")
-            archive = shutil.make_archive(str(task_dir), "zip", output_dir)
+            archive_path = task_dir.parent / f"{task_id}.zip"
+            if archive_path.name == f"{task_id}.zip":
+                archive_path.unlink(missing_ok=True)
+            archive = shutil.make_archive(str(task_dir.parent / task_id), "zip", output_dir)
             self._update(task_id, status="completed", progress=100, current=len(areas), message="SHP 下载完成",
-                         result={"archive": Path(archive).name, "preview": "preview.geojson", "feature_count": len(records), "files": [p.name for p in output_dir.iterdir()]})
+                         result={"archive": Path(archive).name, "archive_path": str(Path(archive).resolve()), "preview": "preview.geojson", "feature_count": len(records), "files": [p.name for p in output_dir.iterdir()]})
         except Exception as exc:
             if task_id in self.tasks: self._update(task_id, status="failed", message="下载失败", error=str(exc))
         finally:
@@ -436,8 +486,14 @@ class PropZoneTaskManager:
         with self.lock:
             task, control = self.tasks.get(task_id), self.controls.get(task_id)
             if not task: return None
-            if action == "pause" and task["status"] in ("queued", "running"): control.pause(); task.update(status="paused", message="任务已暂停")
-            elif action == "resume" and task["status"] == "paused": control.resume(); task.update(status="running", message="任务继续执行")
+            if action == "pause" and task["status"] in ("queued", "running") and control:
+                control.pause(); task.update(status="paused", message="任务已暂停")
+            elif action == "resume" and task["status"] == "paused" and control:
+                control.resume(); task.update(status="running", message="任务继续执行")
+            elif action == "resume" and task["status"] == "paused":
+                task.update(status="queued", message="服务重启，从已下载内容继续", error=None)
+                self.controls[task_id] = _Control(); self._save()
+                self.pool.submit(self._run, task_id); return task
             else: raise ValueError("当前状态不支持此操作")
             task["updated_at"] = datetime.now(timezone.utc).isoformat(); self._save(); return task
     def delete(self, task_id):
@@ -446,11 +502,22 @@ class PropZoneTaskManager:
             if not task: return False
             if control: control.cancel()
             self._save()
-        shutil.rmtree(self.data_dir / task_id, ignore_errors=True); (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True); return True
+            task_dir = Path(task.get("output_dir") or self.data_dir / task_id)
+        if task_dir.name == task_id:
+            shutil.rmtree(task_dir, ignore_errors=True)
+        for archive in (task_dir.parent / f"{task_id}.zip", self.data_dir / f"{task_id}.zip"):
+            if archive.name == f"{task_id}.zip":
+                archive.unlink(missing_ok=True)
+        return True
     def retry(self, task_id):
         with self.lock:
             task = self.tasks.get(task_id)
             if not task: return None
             if task.get("status") != "failed": raise ValueError("仅失败任务可以重试")
             task.update(status="queued", progress=0, current=0, message="等待重新下载", result=None, error=None); self.controls[task_id] = _Control(); self._save()
-        shutil.rmtree(self.data_dir / task_id, ignore_errors=True); (self.data_dir / f"{task_id}.zip").unlink(missing_ok=True); self.pool.submit(self._run, task_id); return task
+            task_dir = Path(task.get("output_dir") or self.data_dir / task_id)
+        # Keep per-area caches so a retry continues from the regions already on disk.
+        for archive in (task_dir.parent / f"{task_id}.zip", self.data_dir / f"{task_id}.zip"):
+            if archive.name == f"{task_id}.zip":
+                archive.unlink(missing_ok=True)
+        self.pool.submit(self._run, task_id); return task
