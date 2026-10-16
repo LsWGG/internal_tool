@@ -317,7 +317,7 @@ export function buildOntologyGraph(triples, options = {}) {
       id, kind, label, short: fitted.text, uri: id.startsWith('lit:') ? '' : id,
       lexical: literal?.oLabel || '', lang: literal?.lang || '',
       datatypeLabel: literal?.datatype ? shortUri(literal.datatype) : '',
-      w: Math.max(88, Math.min(196, fitted.width + 28)), h: 34,
+      w: 16, h: 16, labelW: Math.max(16, Math.min(168, fitted.width)),
     }
   })
   const present = new Set(nodes.map(node => node.id))
@@ -330,10 +330,6 @@ export function buildOntologyGraph(triples, options = {}) {
 export function canvasEdges(nodes, edges = []) {
   const ids = new Set(nodes.map(node => node.id))
   return edges.filter(edge => ids.has(edge.s) && ids.has(edge.o))
-}
-
-function overlaps(a, b, padX = 22, padY = 14) {
-  return Math.abs(a.x - b.x) < (a.w + b.w) / 2 + padX && Math.abs(a.y - b.y) < (a.h + b.h) / 2 + padY
 }
 
 export function layoutOntology(nodes, edges = []) {
@@ -388,17 +384,19 @@ export function layoutOntology(nodes, edges = []) {
       node.y += Math.max(-40, Math.min(40, node.vy))
     }
   }
+  const spanX = node => Math.max(node.w || 16, node.labelW || 0)
+  const spanY = node => (node.h || 16) + (node.labelW ? 22 : 0)
   for (let pass = 0; pass < 48; pass += 1) {
     let moved = false
     for (let i = 0; i < count; i += 1) {
       for (let j = i + 1; j < count; j += 1) {
         const a = list[i]
         const b = list[j]
-        if (!overlaps(a, b, 8, 8)) continue
+        if (Math.abs(a.x - b.x) >= (spanX(a) + spanX(b)) / 2 + 8 || Math.abs(a.y - b.y) >= (spanY(a) + spanY(b)) / 2 + 8) continue
         const dx = a.x - b.x || 0.5
         const dy = a.y - b.y || 0.3
-        const gapX = (a.w + b.w) / 2 + 16
-        const gapY = (a.h + b.h) / 2 + 12
+        const gapX = (spanX(a) + spanX(b)) / 2 + 20
+        const gapY = (spanY(a) + spanY(b)) / 2 + 12
         const overlapX = gapX - Math.abs(dx)
         const overlapY = gapY - Math.abs(dy)
         if (overlapX < overlapY) {
@@ -577,9 +575,10 @@ export function fitGraph(nodes, width, height, edges = []) {
   if (!nodes.length || width < 20 || height < 20) return {x: 40, y: 40, k: 1}
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
   for (const node of nodes) {
-    minX = Math.min(minX, node.x - node.w / 2)
-    maxX = Math.max(maxX, node.x + node.w / 2)
-    minY = Math.min(minY, node.y - node.h / 2)
+    const half = Math.max(node.w, node.labelW || 0) / 2
+    minX = Math.min(minX, node.x - half)
+    maxX = Math.max(maxX, node.x + half)
+    minY = Math.min(minY, node.y - node.h / 2 - (node.labelW ? 20 : 0))
     maxY = Math.max(maxY, node.y + node.h / 2)
     if (node.card) {
       minX = Math.min(minX, node.card.x)
@@ -595,10 +594,10 @@ export function fitGraph(nodes, width, height, edges = []) {
     minY = Math.min(minY, edge.ly - 20)
     maxY = Math.max(maxY, edge.ly + 20)
   }
-  minX -= 32
-  maxX += 32
-  minY -= 24
-  maxY += 24
+  minX -= 36
+  maxX += 36
+  minY -= 72
+  maxY += 28
   const boxW = Math.max(1, maxX - minX)
   const boxH = Math.max(1, maxY - minY)
   const k = Math.min(1.35, Math.max(0.18, Math.min((width - 24) / boxW, (height - 24) / boxH)))
