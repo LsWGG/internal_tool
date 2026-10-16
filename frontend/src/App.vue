@@ -16,6 +16,7 @@ import CleanTool from './CleanTool.vue'
 const PdfToolbox=defineAsyncComponent(()=>import('./PdfToolbox.vue'))
 const jsonAiPatch=ref(null)
 const JsonTool=defineAsyncComponent(()=>import('./JsonTool.vue'))
+const OntologyViewer=defineAsyncComponent(()=>import('./OntologyViewer.vue'))
 import ExternalToolPage from './ExternalToolPage.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import {tileSources} from './tileSources'
@@ -733,6 +734,7 @@ onBeforeUnmount(()=>{clearInterval(timer);stopDouyinLoginPolling();clearTimeout(
     <MermaidExportTool v-if="view==='mermaid-export'" @notify="(message,type)=>notify(message,type)" />
     <ImageMetadataTool v-if="view==='image-metadata'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
     <JsonTool v-if="view==='json'" :ai-patch="jsonAiPatch" />
+    <OntologyViewer v-if="view==='ontology'" />
     <PdfToolbox v-if="view==='pdf-toolbox'" />
     <CleanTool v-if="view==='clean'" :confirm-action="ask" @notify="(message,type)=>notify(message,type)" />
     <section v-if="view==='image-convert'" class="image-convert-page">

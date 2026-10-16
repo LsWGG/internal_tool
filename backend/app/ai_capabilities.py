@@ -134,6 +134,7 @@ CAPABILITIES = {
     },
     "pdf-toolbox": _manual("pdf-toolbox", "PDF 工具箱", "合并、拆分、提取、旋转、压缩、水印、PDF 与 Word/图片互转、文本提取和多模态 OCR；需要在页面上传文件。", uploads=True),
     "json": _manual("json", "JSON 解析工具", "粘贴或上传 JSON，格式化、树形和表格视图、JSONPath 查询、格式转换及双栏差异对比。"),
+    "ontology": _manual("ontology", "本体文件可视化", "导入 RDF/XML 本体文件，以图谱画布查看类、属性和实例关系。", uploads=True),
     "docker": _manual("docker", "Docker 离线包", "生成 Docker 与 Compose 离线安装包。"),
     "compose-manager": _manual("compose-manager", "Docker 服务管理", "管理本机 Docker Compose 文件，启动、停止、重启服务并查看日志。"),
 }
